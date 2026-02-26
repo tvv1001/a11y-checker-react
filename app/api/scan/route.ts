@@ -3,6 +3,7 @@ import { chromium } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import axeCore from "axe-core";
 import { processResults, getConfig } from "@/lib/axe-config";
+import { sendLogToStream } from "./stream/route";
 
 export const maxDuration = 60; // Maximum execution time in seconds
 export const dynamic = "force-dynamic";
@@ -53,6 +54,9 @@ function addLog(sessionId: string, type: LogMessage["type"], message: string) {
   if (sessionLogs.length > 100) {
     sessionLogs.shift();
   }
+
+  // Also send to live stream if available
+  sendLogToStream(sessionId, type, message);
 }
 
 export async function GET(request: NextRequest) {

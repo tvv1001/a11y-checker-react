@@ -139,6 +139,7 @@ export default function Home() {
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const consoleOutputRef = useRef<HTMLDivElement>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   // Auto-scroll console to bottom
   useEffect(() => {
@@ -147,6 +148,15 @@ export default function Home() {
         consoleOutputRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Cleanup EventSource on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
+  }, []);
 
   const handleScan = useCallback(
     async (targetUrl?: string) => {
@@ -165,6 +175,33 @@ export default function Home() {
       const sessionId =
         Date.now().toString(36) + Math.random().toString(36).substr(2);
 
+      // Close existing EventSource if any
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+
+      // Connect to log stream
+      const eventSource = new EventSource(
+        `/api/scan/stream?session=${sessionId}`,
+      );
+      eventSourceRef.current = eventSource;
+
+      eventSource.onmessage = (event) => {
+        if (event.data && event.data !== ": heartbeat") {
+          try {
+            const logMessage = JSON.parse(event.data);
+            setLogs((prev) => [...prev, logMessage]);
+          } catch (error) {
+            console.error("Error parsing log message:", error);
+          }
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error("EventSource error:", error);
+        eventSource.close();
+      };
+
       try {
         const params = new URLSearchParams({
           url: urlToScan,
@@ -179,7 +216,6 @@ export default function Home() {
         }
 
         setResults(data);
-        setLogs(data.logs || []);
 
         // Update the URL with the scanned page as a query parameter
         const encodedUrl = encodeURIComponent(urlToScan);
@@ -202,6 +238,13 @@ export default function Home() {
         ]);
       } finally {
         setIsLoading(false);
+        // Close the EventSource after a short delay to ensure all logs are received
+        setTimeout(() => {
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
+        }, 1000);
       }
     },
     [url],
@@ -266,23 +309,24 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Loading Section */}
-      {isLoading && (
-        <div className="loading-section">
-          <div className="loading-spinner"></div>
-          <p className="loading-text">Scanning page...</p>
-        </div>
-      )}
-
       {/* Console Section */}
-      {logs.length > 0 && (
+      {(logs.length > 0 || isLoading) && (
         <div className="console-section">
           <div className="console-header">
-            <h2>Console Output</h2>
+            <div className="console-title-group">
+              <h2>Console Output</h2>
+              {isLoading && (
+                <span className="live-indicator">
+                  <span className="live-dot"></span>
+                  LIVE
+                </span>
+              )}
+            </div>
             <button
               onClick={clearConsole}
               className="clear-button"
               aria-label="Clear console"
+              disabled={isLoading}
             >
               Clear
             </button>
@@ -296,6 +340,12 @@ export default function Home() {
                 {log.message}
               </div>
             ))}
+            {isLoading && (
+              <div className="console-loading">
+                <div className="loading-spinner"></div>
+                <span className="loading-text">Scanning in progress...</span>
+              </div>
+            )}
           </div>
         </div>
       )}
