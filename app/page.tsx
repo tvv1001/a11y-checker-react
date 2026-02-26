@@ -16,14 +16,6 @@ function ViolationCard({ violation }: { violation: Violation }) {
       <div className="issue-header">
         <div className="issue-title-group">
           <h3 className="issue-title">{violation.id}</h3>
-          <a
-            href={`https://dequeuniversity.com/rules/axe/4.11/${violation.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rule-link"
-          >
-            View Rule Details →
-          </a>
         </div>
         <span className={`issue-impact ${violation.impact}`}>
           {violation.impact}
