@@ -468,7 +468,10 @@ function getARIAAttributeTooltip(name: string, value: string): string {
   return tooltip;
 }
 
-function renderAttributes(attributes: Record<string, string>) {
+function renderAttributes(
+  attributes: Record<string, string>,
+  elementTag?: string,
+) {
   const entries = Object.entries(attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
   );
@@ -483,8 +486,12 @@ function renderAttributes(attributes: Record<string, string>) {
     <>
       {visible.map(([name, value]) => {
         const isAriaAttribute = name.startsWith("aria-");
+        const isRoleAttribute = name === "role";
         const tooltipContent = isAriaAttribute
           ? getARIAAttributeTooltip(name, value)
+          : undefined;
+        const roleTooltip = isRoleAttribute
+          ? getARIARoleTooltip(value, elementTag)
           : undefined;
 
         const badge = (
@@ -495,10 +502,10 @@ function renderAttributes(attributes: Record<string, string>) {
           </span>
         );
 
-        return isAriaAttribute && tooltipContent ? (
+        return tooltipContent || roleTooltip ? (
           <StyledTooltip
             key={name}
-            content={`[ARIA] ${tooltipContent}`}
+            content={`[ARIA] ${roleTooltip ?? tooltipContent}`}
             className="dom-attr-tooltip"
           >
             {badge}
@@ -851,7 +858,7 @@ function renderDomTree(
         content={node.selector}
         className="dom-tree-tooltip"
       >
-        <div className={lineClass} style={{ paddingLeft: `${depth * 16}px` }}>
+        <div className={lineClass} style={{ marginLeft: `${depth * 16}px` }}>
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
               &lt;
@@ -895,7 +902,7 @@ function renderDomTree(
                   node.tagName
                 )}
               </span>
-              {renderAttributes(node.attributes)}
+              {renderAttributes(node.attributes, node.tagName)}
               <span className="dom-tree-tag">{">"}</span>
             </>
           )}
@@ -957,7 +964,7 @@ function renderDomTree(
         content={node.selector}
         className="dom-tree-tooltip"
       >
-        <div className={lineClass} style={{ paddingLeft: `${depth * 16}px` }}>
+        <div className={lineClass} style={{ marginLeft: `${depth * 16}px` }}>
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
               &lt;
@@ -1000,7 +1007,7 @@ function renderDomTree(
                   node.tagName
                 )}
               </span>
-              {renderAttributes(node.attributes)}
+              {renderAttributes(node.attributes, node.tagName)}
               <span className="dom-tree-tag">{"/>"} </span>
             </>
           )}
@@ -1083,7 +1090,7 @@ function renderDomTree(
               node.tagName
             )}
           </span>
-          {renderAttributes(node.attributes)}
+          {renderAttributes(node.attributes, node.tagName)}
           <span className="dom-tree-tag">{">"}</span>
         </>
       )}
@@ -1129,7 +1136,7 @@ function renderDomTree(
       >
         <summary
           className={`dom-tree-summary ${lineClass}`}
-          style={{ paddingLeft: `${depth * 16}px` }}
+          style={{ marginLeft: `${depth * 16}px` }}
         >
           {lineContent}
         </summary>
@@ -1144,7 +1151,7 @@ function renderDomTree(
           )}
           <div
             className={`${lineClass} dom-tree-closing`}
-            style={{ paddingLeft: `${depth * 16}px` }}
+            style={{ marginLeft: `${depth * 16}px` }}
           >
             <span className="dom-tree-tag">
               &lt;/

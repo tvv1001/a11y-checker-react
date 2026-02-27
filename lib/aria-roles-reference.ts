@@ -155,6 +155,23 @@ export const ARIA_ROLES_REFERENCE: Record<string, ARIARole> = {
     nativeHTMLEquivalent: "<button>",
     relatedAttributes: ["aria-pressed", "tabindex"],
   },
+  menu: {
+    name: "menu",
+    category: "widget",
+    description:
+      "A list of choices or commands, typically used for application-style menus",
+    purpose: "Groups menu items for keyboard-accessible command menus",
+    example:
+      '<ul role="menu" aria-label="Actions"><li role="menuitem">Edit</li></ul>',
+    bestPractices: [
+      "Use for application-style command menus, not site navigation",
+      "Manage focus within the menu with arrow key navigation",
+      "Children should be menuitem, menuitemcheckbox, or menuitemradio",
+      "Provide aria-label or aria-labelledby when needed",
+      "Use <nav> for navigation links instead of role=menu",
+    ],
+    relatedAttributes: ["aria-label", "aria-labelledby"],
+  },
   checkbox: {
     name: "checkbox",
     category: "widget",
