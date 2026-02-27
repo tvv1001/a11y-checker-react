@@ -1,9 +1,12 @@
+import type { DOMAnalysis } from "./dom-analyzer";
+
 export interface ScanResult {
   violations: Violation[];
   passes: PassedCheck[];
   incomplete: IncompleteCheck[];
   summary: ScanSummary;
   logs: LogMessage[];
+  domAnalysis?: DOMAnalysis;
 }
 
 export interface Violation {
