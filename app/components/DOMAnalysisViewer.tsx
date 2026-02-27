@@ -269,30 +269,105 @@ function filterSequentialHeadings(
 }
 
 const SEMANTIC_TAGS = new Set([
+  // HTML5 Semantic/Structural elements
   "header",
   "nav",
+  "search",
   "main",
   "section",
   "article",
   "aside",
   "footer",
+  "figure",
+  "figcaption",
+  "details",
+  "summary",
+  "dialog",
+  "mark",
+  "time",
+  // Form elements
   "form",
   "label",
   "button",
-  "a",
   "input",
   "select",
   "textarea",
+  "datalist",
+  "fieldset",
+  "legend",
+  "meter",
+  "output",
+  "progress",
+  "optgroup",
+  "option",
+  // Media elements
+  "audio",
+  "video",
+  "canvas",
+  "svg",
   "img",
+  "picture",
+  // Links and navigation
+  "a",
+  // Headings
   "h1",
   "h2",
   "h3",
   "h4",
   "h5",
   "h6",
+  // Lists
   "ul",
   "ol",
   "li",
+  "dl",
+  "dt",
+  "dd",
+  // Text content
+  "p",
+  "blockquote",
+  "pre",
+  "code",
+  "hr",
+  // Table
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "th",
+  "td",
+  "caption",
+  "colgroup",
+  // Text semantics
+  "abbr",
+  "cite",
+  "dfn",
+  "em",
+  "kbd",
+  "samp",
+  "strong",
+  "var",
+  "sub",
+  "sup",
+  "small",
+  "b",
+  "i",
+  "s",
+  "u",
+  "q",
+  "data",
+  "ruby",
+  "rt",
+  "rp",
+  "bdi",
+  "bdo",
+  // Embedded content
+  "iframe",
+  "embed",
+  "object",
+  // Document sections
+  "address",
 ]);
 
 const VOID_ELEMENTS = new Set([
@@ -395,7 +470,7 @@ function getARIAAttributeTooltip(name: string, value: string): string {
 
 function renderAttributes(attributes: Record<string, string>) {
   const entries = Object.entries(attributes).filter(
-    ([name]) => name !== "class" && name !== "style",
+    ([name]) => name !== "class" && name !== "style" && name !== "inert",
   );
   const visible = entries.slice(0, MAX_ATTRS_PER_NODE);
   const hiddenCount = entries.length - visible.length;
@@ -476,19 +551,139 @@ function buildViolationTargetMap(violations: Violation[]) {
   return map;
 }
 
-function getARIARoleTooltip(roleName: string): string {
+interface AriaRelationship {
+  type: "labelledby" | "describedby";
+  targetIds: string[];
+  sourceSelector: string;
+}
+
+function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
+  idToSelector: Map<string, string>;
+  selectorToRelationships: Map<string, AriaRelationship[]>;
+  idToReferences: Map<
+    string,
+    { selector: string; type: "labelledby" | "describedby" }[]
+  >;
+} {
+  const idToSelector = new Map<string, string>();
+  const selectorToRelationships = new Map<string, AriaRelationship[]>();
+  const idToReferences = new Map<
+    string,
+    { selector: string; type: "labelledby" | "describedby" }[]
+  >();
+
+  function traverse(current: DOMTreeNode) {
+    // Track elements with IDs
+    if (current.attributes.id) {
+      idToSelector.set(current.attributes.id, current.selector);
+    }
+
+    // Track elements with aria-labelledby or aria-describedby
+    const labelledBy = current.attributes["aria-labelledby"];
+    const describedBy = current.attributes["aria-describedby"];
+
+    if (labelledBy) {
+      const targetIds = labelledBy.split(/\s+/).filter(Boolean);
+      const relationship: AriaRelationship = {
+        type: "labelledby",
+        targetIds,
+        sourceSelector: current.selector,
+      };
+
+      const existing = selectorToRelationships.get(current.selector) || [];
+      selectorToRelationships.set(current.selector, [
+        ...existing,
+        relationship,
+      ]);
+
+      // Track reverse relationship
+      targetIds.forEach((id) => {
+        const refs = idToReferences.get(id) || [];
+        refs.push({ selector: current.selector, type: "labelledby" });
+        idToReferences.set(id, refs);
+      });
+    }
+
+    if (describedBy) {
+      const targetIds = describedBy.split(/\s+/).filter(Boolean);
+      const relationship: AriaRelationship = {
+        type: "describedby",
+        targetIds,
+        sourceSelector: current.selector,
+      };
+
+      const existing = selectorToRelationships.get(current.selector) || [];
+      selectorToRelationships.set(current.selector, [
+        ...existing,
+        relationship,
+      ]);
+
+      // Track reverse relationship
+      targetIds.forEach((id) => {
+        const refs = idToReferences.get(id) || [];
+        refs.push({ selector: current.selector, type: "describedby" });
+        idToReferences.set(id, refs);
+      });
+    }
+
+    // Recurse through children
+    if (current.children) {
+      current.children.forEach((child) => traverse(child));
+    }
+  }
+
+  if (node) {
+    traverse(node);
+  }
+
+  return { idToSelector, selectorToRelationships, idToReferences };
+}
+
+function getARIARoleTooltip(roleName: string, element?: string): string {
   const roleData = getARIARole(roleName);
   if (!roleData) {
     return `Role: ${roleName}`;
   }
-  return `${roleName} (${roleData.category}): ${roleData.description}`;
+
+  let tooltip = `${roleName.toUpperCase()}\n`;
+  tooltip += `Purpose: ${roleData.purpose}\n`;
+  tooltip += `${roleData.description}\n\n`;
+
+  // Check if using native HTML equivalent
+  if (roleData.nativeHTMLEquivalent && element) {
+    const nativeTag = roleData.nativeHTMLEquivalent.slice(1, -1); // Remove < >
+    if (element.toLowerCase() === nativeTag) {
+      tooltip += `✅ Using native ${roleData.nativeHTMLEquivalent} element - good!\n`;
+    } else {
+      tooltip += `⚠️ Consider using ${roleData.nativeHTMLEquivalent} instead of role="${roleName}"\n`;
+    }
+    tooltip += `\n`;
+  }
+
+  // Add best practices
+  if (roleData.bestPractices && roleData.bestPractices.length > 0) {
+    tooltip += `Best Practices:\n`;
+    roleData.bestPractices.forEach((practice) => {
+      tooltip += `• ${practice}\n`;
+    });
+  }
+
+  // Add related attributes hint
+  if (roleData.relatedAttributes && roleData.relatedAttributes.length > 0) {
+    tooltip += `\nCommon Attributes: ${roleData.relatedAttributes.join(", ")}`;
+  }
+
+  return tooltip;
 }
 
 function getSemanticTagDescription(tagName: string): string {
   const semanticTagDescriptions: Record<string, string> = {
+    // Semantic/Structural (HTML5)
     header:
       "Represents introductory content or a group of introductory aids (logo, heading, search form, etc.)",
     nav: "Contains navigation links for the document or site",
+    search:
+      "Contains a set of form controls for searching or filtering content",
     main: "Specifies the main content of the document. Only one per page",
     section: "Defines a thematic grouping of content",
     article:
@@ -497,25 +692,97 @@ function getSemanticTagDescription(tagName: string): string {
       "Contains content that is tangentially related to the main content (sidebars, related links)",
     footer:
       "Represents a footer for its nearest ancestor sectioning content or root element",
+    figure: "Represents self-contained content with optional caption",
+    figcaption: "Caption or legend for a figure element",
+    details: "Disclosure widget for hiding/showing additional details",
+    summary: "Summary, caption, or legend for a details element",
+    dialog: "Dialog box or interactive component (HTML5)",
+    mark: "Highlighted or marked text for reference purposes",
+    time: "Represents a date and/or time with machine-readable format",
+    address: "Contact information for author/owner of document",
+    // Form elements
     form: "Contains form controls for user input and submission",
     button: "A clickable button element for user interactions",
-    a: "Hyperlink to other pages or resources",
     input: "Form control for user input (text, checkbox, radio, etc.)",
     select: "Dropdown list for form input",
     textarea: "Multi-line text input for forms",
+    label: "Associates a text label with a form control",
+    datalist: "Predefined options for input element (HTML5)",
+    fieldset: "Groups related form controls together",
+    legend: "Caption for a fieldset element",
+    meter: "Scalar measurement within a known range (HTML5)",
+    output: "Result of a calculation or user action (HTML5)",
+    progress: "Progress indicator for a task (HTML5)",
+    optgroup: "Group of options within a select element",
+    option: "Option within a select or datalist element",
+    // Media (HTML5)
+    audio: "Embeds sound content (HTML5)",
+    video: "Embeds video content (HTML5)",
+    canvas: "Graphics canvas for drawing via JavaScript (HTML5)",
+    svg: "Scalable Vector Graphics container (HTML5)",
     img: "Embeds an image. Always include alt text for accessibility",
+    picture: "Container for multiple image sources (HTML5)",
+    // Links
+    a: "Hyperlink to other pages or resources",
+    // Headings
     h1: "Heading level 1 - Main page heading. Use only once per page",
     h2: "Heading level 2 - Major section heading",
     h3: "Heading level 3 - Subsection heading",
     h4: "Heading level 4 - Sub-subsection heading",
     h5: "Heading level 5 - Minor heading",
     h6: "Heading level 6 - Smallest heading",
+    // Lists
     ul: "Unordered (bulleted) list",
     ol: "Ordered (numbered) list",
     li: "List item within ul or ol",
-    label: "Associates a text label with a form control",
+    dl: "Description list (definition list)",
+    dt: "Term in a description list",
+    dd: "Description of a term in a description list",
+    // Text content
+    p: "Paragraph of text",
+    blockquote: "Extended quotation from another source",
+    pre: "Preformatted text with preserved whitespace",
+    code: "Fragment of computer code",
+    hr: "Thematic break or horizontal rule",
+    // Table
+    table: "Tabular data organized in rows and columns",
+    thead: "Groups header content in a table",
+    tbody: "Groups body content in a table",
+    tfoot: "Groups footer content in a table",
+    tr: "Table row",
+    th: "Table header cell",
+    td: "Table data cell",
+    caption: "Title or caption for a table",
+    colgroup: "Group of columns in a table",
+    // Text semantics
+    abbr: "Abbreviation or acronym",
+    cite: "Title of a creative work",
+    dfn: "Term being defined",
+    em: "Emphasized text (typically italic)",
+    kbd: "Keyboard input",
+    samp: "Sample output from a computer program",
+    strong: "Strong importance (typically bold)",
+    var: "Variable in mathematical expression or programming",
+    sub: "Subscript text",
+    sup: "Superscript text",
+    small: "Side comments or small print",
+    b: "Bold text without extra importance",
+    i: "Italic text (alternate voice/mood)",
+    s: "Text that is no longer accurate (strikethrough)",
+    u: "Unarticulated annotation (underline)",
+    q: "Short inline quotation",
+    data: "Machine-readable content (HTML5)",
+    ruby: "Ruby annotation for East Asian typography (HTML5)",
+    rt: "Ruby text component (HTML5)",
+    rp: "Fallback parentheses for ruby annotations (HTML5)",
+    bdi: "Isolates text for bidirectional formatting (HTML5)",
+    bdo: "Overrides text direction",
+    // Embedded content
+    iframe: "Nested browsing context (inline frame)",
+    embed: "External content plugin (HTML5)",
+    object: "External resource (image, video, etc.)",
   };
-  return semanticTagDescriptions[tagName] || `Semantic HTML5 tag: ${tagName}`;
+  return semanticTagDescriptions[tagName] || `HTML5 tag: ${tagName}`;
 }
 
 function renderDomTree(
@@ -525,15 +792,53 @@ function renderDomTree(
     string,
     { count: number; hasWcag: boolean; hasAxe: boolean }
   >,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
 ) {
   const isSemantic = SEMANTIC_TAGS.has(node.tagName);
   const isVoid = VOID_ELEMENTS.has(node.tagName);
   const violationMeta = violationTargets.get(node.selector);
   const hasChildren = node.children && node.children.length > 0;
+  const visibleAttributes = Object.entries(node.attributes).filter(
+    ([name]) => name !== "class" && name !== "style" && name !== "inert",
+  );
+
+  if (
+    (node.tagName === "div" ||
+      node.tagName === "span" ||
+      node.tagName === "p") &&
+    !hasChildren &&
+    !node.textSnippet &&
+    visibleAttributes.length === 0
+  ) {
+    return null;
+  }
+
+  // Check for ARIA relationships
+  const relationships = ariaRelationships?.selectorToRelationships.get(
+    node.selector,
+  );
+  const hasRelationship = relationships && relationships.length > 0;
+
+  // Check if this element is referenced by others
+  const elementId = node.attributes.id;
+  const referencedBy = elementId
+    ? ariaRelationships?.idToReferences.get(elementId)
+    : undefined;
+  const isReferenced = referencedBy && referencedBy.length > 0;
+
   const lineClass = [
     "dom-tree-line",
     isSemantic ? "dom-tree-semantic" : "",
     violationMeta ? "dom-tree-violation" : "",
+    hasRelationship ? "dom-tree-has-relationship" : "",
+    isReferenced ? "dom-tree-is-referenced" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -549,12 +854,47 @@ function renderDomTree(
         <div className={lineClass} style={{ paddingLeft: `${depth * 16}px` }}>
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
-              &lt;{node.tagName}
-              {">"}{" "}
+              &lt;
+              {node.attributes.role || isSemantic ? (
+                <StyledTooltip
+                  content={
+                    node.attributes.role && isSemantic
+                      ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}\n\n[HTML] ${getSemanticTagDescription(node.tagName)}`
+                      : node.attributes.role
+                        ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}`
+                        : `[HTML] ${getSemanticTagDescription(node.tagName)}`
+                  }
+                  className="dom-badge-tooltip"
+                >
+                  <span>{node.tagName}</span>
+                </StyledTooltip>
+              ) : (
+                node.tagName
+              )}
+              {">"}
+              {}
             </span>
           ) : (
             <>
-              <span className="dom-tree-tag">&lt;{node.tagName}</span>
+              <span className="dom-tree-tag">
+                &lt;
+                {node.attributes.role || isSemantic ? (
+                  <StyledTooltip
+                    content={
+                      node.attributes.role && isSemantic
+                        ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}\n\n[HTML] ${getSemanticTagDescription(node.tagName)}`
+                        : node.attributes.role
+                          ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}`
+                          : `[HTML] ${getSemanticTagDescription(node.tagName)}`
+                    }
+                    className="dom-badge-tooltip"
+                  >
+                    <span>{node.tagName}</span>
+                  </StyledTooltip>
+                ) : (
+                  node.tagName
+                )}
+              </span>
               {renderAttributes(node.attributes)}
               <span className="dom-tree-tag">{">"}</span>
             </>
@@ -563,31 +903,45 @@ function renderDomTree(
             <span className="dom-tree-text">{node.textSnippet}</span>
           )}
           <span className="dom-tree-tag">
-            &lt;/{node.tagName}
-            {">"}
-          </span>
-          <span className="dom-tree-badges">
-            {node.attributes.role && (
-              <StyledTooltip
-                content={`[ARIA] ${getARIARoleTooltip(node.attributes.role)}`}
-                className="dom-badge-tooltip"
-              >
-                <span className="dom-badge aria">ROLE</span>
-              </StyledTooltip>
-            )}
-            {isSemantic && (
+            &lt;/
+            {isSemantic ? (
               <StyledTooltip
                 content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
                 className="dom-badge-tooltip"
               >
-                <span className="dom-badge html5">HTML5</span>
+                <span>{node.tagName}</span>
               </StyledTooltip>
+            ) : (
+              node.tagName
             )}
+            {">"}
+          </span>
+          <span className="dom-tree-badges">
             {violationMeta?.hasAxe && (
               <span className="dom-badge axe">AXE</span>
             )}
             {violationMeta?.hasWcag && (
               <span className="dom-badge wcag">WCAG</span>
+            )}
+            {relationships &&
+              relationships.map((rel, idx) => (
+                <StyledTooltip
+                  key={`rel-${idx}`}
+                  content={`[ARIA] This element is ${rel.type === "labelledby" ? "labelled by" : "described by"} element(s) with ID: ${rel.targetIds.join(", ")}`}
+                  className="dom-badge-tooltip"
+                >
+                  <span className="dom-badge aria-relationship">
+                    {rel.type === "labelledby" ? "\u2192LABEL" : "\u2192DESC"}
+                  </span>
+                </StyledTooltip>
+              ))}
+            {referencedBy && referencedBy.length > 0 && (
+              <StyledTooltip
+                content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
+                className="dom-badge-tooltip"
+              >
+                <span className="dom-badge aria-referenced">\u2190REF</span>
+              </StyledTooltip>
             )}
           </span>
         </div>
@@ -606,38 +960,76 @@ function renderDomTree(
         <div className={lineClass} style={{ paddingLeft: `${depth * 16}px` }}>
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
-              &lt;{node.tagName}
+              &lt;
+              {node.attributes.role || isSemantic ? (
+                <StyledTooltip
+                  content={
+                    node.attributes.role && isSemantic
+                      ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}\n\n[HTML] ${getSemanticTagDescription(node.tagName)}`
+                      : node.attributes.role
+                        ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}`
+                        : `[HTML] ${getSemanticTagDescription(node.tagName)}`
+                  }
+                  className="dom-badge-tooltip"
+                >
+                  <span>{node.tagName}</span>
+                </StyledTooltip>
+              ) : (
+                node.tagName
+              )}
               {"/>"}{" "}
             </span>
           ) : (
             <>
-              <span className="dom-tree-tag">&lt;{node.tagName}</span>
+              <span className="dom-tree-tag">
+                &lt;
+                {node.attributes.role || isSemantic ? (
+                  <StyledTooltip
+                    content={
+                      node.attributes.role && isSemantic
+                        ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}\n\n[HTML] ${getSemanticTagDescription(node.tagName)}`
+                        : node.attributes.role
+                          ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}`
+                          : `[HTML] ${getSemanticTagDescription(node.tagName)}`
+                    }
+                    className="dom-badge-tooltip"
+                  >
+                    <span>{node.tagName}</span>
+                  </StyledTooltip>
+                ) : (
+                  node.tagName
+                )}
+              </span>
               {renderAttributes(node.attributes)}
               <span className="dom-tree-tag">{"/>"} </span>
             </>
           )}
           <span className="dom-tree-badges">
-            {node.attributes.role && (
-              <StyledTooltip
-                content={`[ARIA] ${getARIARoleTooltip(node.attributes.role)}`}
-                className="dom-badge-tooltip"
-              >
-                <span className="dom-badge aria">ROLE</span>
-              </StyledTooltip>
-            )}
-            {isSemantic && (
-              <StyledTooltip
-                content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
-                className="dom-badge-tooltip"
-              >
-                <span className="dom-badge html5">HTML5</span>
-              </StyledTooltip>
-            )}
             {violationMeta?.hasAxe && (
               <span className="dom-badge axe">AXE</span>
             )}
             {violationMeta?.hasWcag && (
               <span className="dom-badge wcag">WCAG</span>
+            )}
+            {relationships &&
+              relationships.map((rel, idx) => (
+                <StyledTooltip
+                  key={`rel-${idx}`}
+                  content={`[ARIA] This element is ${rel.type === "labelledby" ? "labelled by" : "described by"} element(s) with ID: ${rel.targetIds.join(", ")}`}
+                  className="dom-badge-tooltip"
+                >
+                  <span className="dom-badge aria-relationship">
+                    {rel.type === "labelledby" ? "→LABEL" : "→DESC"}
+                  </span>
+                </StyledTooltip>
+              ))}
+            {referencedBy && referencedBy.length > 0 && (
+              <StyledTooltip
+                content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
+                className="dom-badge-tooltip"
+              >
+                <span className="dom-badge aria-referenced">←REF</span>
+              </StyledTooltip>
             )}
           </span>
         </div>
@@ -650,12 +1042,47 @@ function renderDomTree(
     <>
       {Object.keys(node.attributes).length === 0 ? (
         <span className="dom-tree-tag">
-          &lt;{node.tagName}
-          {">"}{" "}
+          &lt;
+          {node.attributes.role || isSemantic ? (
+            <StyledTooltip
+              content={
+                node.attributes.role && isSemantic
+                  ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}\n\n[HTML] ${getSemanticTagDescription(node.tagName)}`
+                  : node.attributes.role
+                    ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}`
+                    : `[HTML] ${getSemanticTagDescription(node.tagName)}`
+              }
+              className="dom-badge-tooltip"
+            >
+              <span>{node.tagName}</span>
+            </StyledTooltip>
+          ) : (
+            node.tagName
+          )}
+          {">"}
+          {}
         </span>
       ) : (
         <>
-          <span className="dom-tree-tag">&lt;{node.tagName}</span>
+          <span className="dom-tree-tag">
+            &lt;
+            {node.attributes.role || isSemantic ? (
+              <StyledTooltip
+                content={
+                  node.attributes.role && isSemantic
+                    ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}\n\n[HTML] ${getSemanticTagDescription(node.tagName)}`
+                    : node.attributes.role
+                      ? `[ARIA] ${getARIARoleTooltip(node.attributes.role, node.tagName)}`
+                      : `[HTML] ${getSemanticTagDescription(node.tagName)}`
+                }
+                className="dom-badge-tooltip"
+              >
+                <span>{node.tagName}</span>
+              </StyledTooltip>
+            ) : (
+              node.tagName
+            )}
+          </span>
           {renderAttributes(node.attributes)}
           <span className="dom-tree-tag">{">"}</span>
         </>
@@ -664,24 +1091,28 @@ function renderDomTree(
         <span className="dom-tree-text">{node.textSnippet}</span>
       )}
       <span className="dom-tree-badges">
-        {node.attributes.role && (
-          <StyledTooltip
-            content={`[ARIA] ${getARIARoleTooltip(node.attributes.role)}`}
-            className="dom-badge-tooltip"
-          >
-            <span className="dom-badge aria">ROLE</span>
-          </StyledTooltip>
-        )}
-        {isSemantic && (
-          <StyledTooltip
-            content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
-            className="dom-badge-tooltip"
-          >
-            <span className="dom-badge html5">HTML5</span>
-          </StyledTooltip>
-        )}
         {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
         {violationMeta?.hasWcag && <span className="dom-badge wcag">WCAG</span>}
+        {relationships &&
+          relationships.map((rel, idx) => (
+            <StyledTooltip
+              key={`rel-${idx}`}
+              content={`[ARIA] This element is ${rel.type === "labelledby" ? "labelled by" : "described by"} element(s) with ID: ${rel.targetIds.join(", ")}`}
+              className="dom-badge-tooltip"
+            >
+              <span className="dom-badge aria-relationship">
+                {rel.type === "labelledby" ? "→LABEL" : "→DESC"}
+              </span>
+            </StyledTooltip>
+          ))}
+        {referencedBy && referencedBy.length > 0 && (
+          <StyledTooltip
+            content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
+            className="dom-badge-tooltip"
+          >
+            <span className="dom-badge aria-referenced">←REF</span>
+          </StyledTooltip>
+        )}
       </span>
     </>
   );
@@ -692,7 +1123,10 @@ function renderDomTree(
       content={node.selector}
       className="dom-tree-tooltip"
     >
-      <details className="dom-tree-details" open={depth < 2}>
+      <details
+        className="dom-tree-details"
+        open={depth < 2 && node.tagName !== "head"}
+      >
         <summary
           className={`dom-tree-summary ${lineClass}`}
           style={{ paddingLeft: `${depth * 16}px` }}
@@ -701,14 +1135,29 @@ function renderDomTree(
         </summary>
         <div className="dom-tree-children">
           {node.children.map((child) =>
-            renderDomTree(child, depth + 1, violationTargets),
+            renderDomTree(
+              child,
+              depth + 1,
+              violationTargets,
+              ariaRelationships,
+            ),
           )}
           <div
-            className="dom-tree-line dom-tree-closing"
+            className={`${lineClass} dom-tree-closing`}
             style={{ paddingLeft: `${depth * 16}px` }}
           >
             <span className="dom-tree-tag">
-              &lt;/{node.tagName}
+              &lt;/
+              {isSemantic ? (
+                <StyledTooltip
+                  content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
+                  className="dom-badge-tooltip"
+                >
+                  <span>{node.tagName}</span>
+                </StyledTooltip>
+              ) : (
+                node.tagName
+              )}
               {">"}
             </span>
           </div>
@@ -726,6 +1175,7 @@ export function DOMAnalysisViewer({
     analysis;
   const aaViolations = violations.filter(isAALevelViolation);
   const violationTargets = buildViolationTargetMap(violations);
+  const ariaRelationships = buildAriaRelationshipMaps(domTree || null);
 
   return (
     <div className="dom-analysis-section">
@@ -745,10 +1195,11 @@ export function DOMAnalysisViewer({
           </h3>
           <p className="section-hint">
             Expand any line to explore children. ARIA, WCAG, AXE, and HTML5
-            semantics are highlighted.
+            semantics are highlighted. ARIA relationships
+            (labelledby/describedby) shown with →LABEL/→DESC and ←REF badges.
           </p>
           <div className="dom-tree">
-            {renderDomTree(domTree, 0, violationTargets)}
+            {renderDomTree(domTree, 0, violationTargets, ariaRelationships)}
           </div>
         </div>
       )}
