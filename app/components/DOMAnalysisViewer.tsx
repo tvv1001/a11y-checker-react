@@ -3,6 +3,7 @@
 import type { DOMAnalysis, DOMTreeNode } from "@/lib/dom-analyzer";
 import type { Violation } from "@/lib/types";
 import { getARIARole } from "@/lib/aria-roles-reference";
+import { StyledTooltip } from "./StyledTooltip";
 
 interface DOMAnalysisViewerProps {
   analysis: DOMAnalysis;
@@ -378,12 +379,13 @@ function getARIAAttributeTooltip(name: string, value: string): string {
       "For headings in non-h1-h6 elements. Value 1-6 indicates heading level",
     "aria-multiline":
       "For textbox role. Indicates if single-line or multi-line input",
-    "aria-readonly": "Indicates content cannot be modified",
     "aria-owns":
       "Establishes parent-child relationship for elements not in DOM hierarchy",
     "aria-controls": "Indicates this element controls another element by ID",
     "aria-flowto":
       "Indicates reading order. Used to override natural DOM order",
+    "aria-haspopup":
+      "Indicates this element has a popup menu, dropdown, or dialog. Values: false (default, no popup), true (generic popup), menu (dropdown menu), listbox (listbox popup), tree (tree popup), grid (grid popup), dialog (dialog popup). Helps screen reader users understand that activating this element opens a popup",
   };
 
   const description = ariaAttributeInfo[name] || `${name} attribute`;
@@ -406,12 +408,28 @@ function renderAttributes(attributes: Record<string, string>) {
     <>
       {visible.map(([name, value]) => {
         const isAriaAttribute = name.startsWith("aria-");
-        const title = isAriaAttribute
+        const tooltipContent = isAriaAttribute
           ? getARIAAttributeTooltip(name, value)
           : undefined;
 
-        return (
-          <span key={name} className={getAttributeClass(name)} title={title}>
+        const badge = (
+          <span className={getAttributeClass(name)}>
+            <span className="dom-attr-name">{name}</span>
+            <span className="dom-attr-equals">=</span>
+            <span className="dom-attr-value">&quot;{value}&quot;</span>
+          </span>
+        );
+
+        return isAriaAttribute && tooltipContent ? (
+          <StyledTooltip
+            key={name}
+            content={`[ARIA] ${tooltipContent}`}
+            className="dom-attr-tooltip"
+          >
+            {badge}
+          </StyledTooltip>
+        ) : (
+          <span key={name} className={getAttributeClass(name)}>
             <span className="dom-attr-name">{name}</span>
             <span className="dom-attr-equals">=</span>
             <span className="dom-attr-value">&quot;{value}&quot;</span>
@@ -466,6 +484,40 @@ function getARIARoleTooltip(roleName: string): string {
   return `${roleName} (${roleData.category}): ${roleData.description}`;
 }
 
+function getSemanticTagDescription(tagName: string): string {
+  const semanticTagDescriptions: Record<string, string> = {
+    header:
+      "Represents introductory content or a group of introductory aids (logo, heading, search form, etc.)",
+    nav: "Contains navigation links for the document or site",
+    main: "Specifies the main content of the document. Only one per page",
+    section: "Defines a thematic grouping of content",
+    article:
+      "Contains independent, self-contained content that could be distributed on its own",
+    aside:
+      "Contains content that is tangentially related to the main content (sidebars, related links)",
+    footer:
+      "Represents a footer for its nearest ancestor sectioning content or root element",
+    form: "Contains form controls for user input and submission",
+    button: "A clickable button element for user interactions",
+    a: "Hyperlink to other pages or resources",
+    input: "Form control for user input (text, checkbox, radio, etc.)",
+    select: "Dropdown list for form input",
+    textarea: "Multi-line text input for forms",
+    img: "Embeds an image. Always include alt text for accessibility",
+    h1: "Heading level 1 - Main page heading. Use only once per page",
+    h2: "Heading level 2 - Major section heading",
+    h3: "Heading level 3 - Subsection heading",
+    h4: "Heading level 4 - Sub-subsection heading",
+    h5: "Heading level 5 - Minor heading",
+    h6: "Heading level 6 - Smallest heading",
+    ul: "Unordered (bulleted) list",
+    ol: "Ordered (numbered) list",
+    li: "List item within ul or ol",
+    label: "Associates a text label with a form control",
+  };
+  return semanticTagDescriptions[tagName] || `Semantic HTML5 tag: ${tagName}`;
+}
+
 function renderDomTree(
   node: DOMTreeNode,
   depth: number,
@@ -489,85 +541,107 @@ function renderDomTree(
   // For elements without children (but not void), show complete tag with closing on same line
   if (!hasChildren && !isVoid) {
     return (
-      <div
+      <StyledTooltip
         key={node.selector}
-        className={lineClass}
-        style={{ paddingLeft: `${depth * 16}px` }}
-        title={node.selector}
+        content={node.selector}
+        className="dom-tree-tooltip"
       >
-        {Object.keys(node.attributes).length === 0 ? (
-          <span className="dom-tree-tag">
-            &lt;{node.tagName}
-            {">"}{" "}
-          </span>
-        ) : (
-          <>
-            <span className="dom-tree-tag">&lt;{node.tagName}</span>
-            {renderAttributes(node.attributes)}
-            <span className="dom-tree-tag">{">"}</span>
-          </>
-        )}
-        {node.textSnippet && (
-          <span className="dom-tree-text">{node.textSnippet}</span>
-        )}
-        <span className="dom-tree-tag">
-          &lt;/{node.tagName}
-          {">"}
-        </span>
-        <span className="dom-tree-badges">
-          {node.attributes.role && (
-            <span
-              className="dom-badge aria"
-              title={getARIARoleTooltip(node.attributes.role)}
-            >
-              ROLE
+        <div className={lineClass} style={{ paddingLeft: `${depth * 16}px` }}>
+          {Object.keys(node.attributes).length === 0 ? (
+            <span className="dom-tree-tag">
+              &lt;{node.tagName}
+              {">"}{" "}
             </span>
+          ) : (
+            <>
+              <span className="dom-tree-tag">&lt;{node.tagName}</span>
+              {renderAttributes(node.attributes)}
+              <span className="dom-tree-tag">{">"}</span>
+            </>
           )}
-          {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
-          {violationMeta?.hasWcag && (
-            <span className="dom-badge wcag">WCAG</span>
+          {node.textSnippet && (
+            <span className="dom-tree-text">{node.textSnippet}</span>
           )}
-        </span>
-      </div>
+          <span className="dom-tree-tag">
+            &lt;/{node.tagName}
+            {">"}
+          </span>
+          <span className="dom-tree-badges">
+            {node.attributes.role && (
+              <StyledTooltip
+                content={`[ARIA] ${getARIARoleTooltip(node.attributes.role)}`}
+                className="dom-badge-tooltip"
+              >
+                <span className="dom-badge aria">ROLE</span>
+              </StyledTooltip>
+            )}
+            {isSemantic && (
+              <StyledTooltip
+                content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
+                className="dom-badge-tooltip"
+              >
+                <span className="dom-badge html5">HTML5</span>
+              </StyledTooltip>
+            )}
+            {violationMeta?.hasAxe && (
+              <span className="dom-badge axe">AXE</span>
+            )}
+            {violationMeta?.hasWcag && (
+              <span className="dom-badge wcag">WCAG</span>
+            )}
+          </span>
+        </div>
+      </StyledTooltip>
     );
   }
 
   // For void elements (self-closing)
   if (isVoid) {
     return (
-      <div
+      <StyledTooltip
         key={node.selector}
-        className={lineClass}
-        style={{ paddingLeft: `${depth * 16}px` }}
-        title={node.selector}
+        content={node.selector}
+        className="dom-tree-tooltip"
       >
-        {Object.keys(node.attributes).length === 0 ? (
-          <span className="dom-tree-tag">
-            &lt;{node.tagName}
-            {"/>"}{" "}
-          </span>
-        ) : (
-          <>
-            <span className="dom-tree-tag">&lt;{node.tagName}</span>
-            {renderAttributes(node.attributes)}
-            <span className="dom-tree-tag">{"/>"} </span>
-          </>
-        )}
-        <span className="dom-tree-badges">
-          {node.attributes.role && (
-            <span
-              className="dom-badge aria"
-              title={getARIARoleTooltip(node.attributes.role)}
-            >
-              ROLE
+        <div className={lineClass} style={{ paddingLeft: `${depth * 16}px` }}>
+          {Object.keys(node.attributes).length === 0 ? (
+            <span className="dom-tree-tag">
+              &lt;{node.tagName}
+              {"/>"}{" "}
             </span>
+          ) : (
+            <>
+              <span className="dom-tree-tag">&lt;{node.tagName}</span>
+              {renderAttributes(node.attributes)}
+              <span className="dom-tree-tag">{"/>"} </span>
+            </>
           )}
-          {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
-          {violationMeta?.hasWcag && (
-            <span className="dom-badge wcag">WCAG</span>
-          )}
-        </span>
-      </div>
+          <span className="dom-tree-badges">
+            {node.attributes.role && (
+              <StyledTooltip
+                content={`[ARIA] ${getARIARoleTooltip(node.attributes.role)}`}
+                className="dom-badge-tooltip"
+              >
+                <span className="dom-badge aria">ROLE</span>
+              </StyledTooltip>
+            )}
+            {isSemantic && (
+              <StyledTooltip
+                content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
+                className="dom-badge-tooltip"
+              >
+                <span className="dom-badge html5">HTML5</span>
+              </StyledTooltip>
+            )}
+            {violationMeta?.hasAxe && (
+              <span className="dom-badge axe">AXE</span>
+            )}
+            {violationMeta?.hasWcag && (
+              <span className="dom-badge wcag">WCAG</span>
+            )}
+          </span>
+        </div>
+      </StyledTooltip>
     );
   }
 
@@ -591,12 +665,20 @@ function renderDomTree(
       )}
       <span className="dom-tree-badges">
         {node.attributes.role && (
-          <span
-            className="dom-badge aria"
-            title={getARIARoleTooltip(node.attributes.role)}
+          <StyledTooltip
+            content={`[ARIA] ${getARIARoleTooltip(node.attributes.role)}`}
+            className="dom-badge-tooltip"
           >
-            ROLE
-          </span>
+            <span className="dom-badge aria">ROLE</span>
+          </StyledTooltip>
+        )}
+        {isSemantic && (
+          <StyledTooltip
+            content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
+            className="dom-badge-tooltip"
+          >
+            <span className="dom-badge html5">HTML5</span>
+          </StyledTooltip>
         )}
         {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
         {violationMeta?.hasWcag && <span className="dom-badge wcag">WCAG</span>}
@@ -605,29 +687,34 @@ function renderDomTree(
   );
 
   return (
-    <details key={node.selector} className="dom-tree-details" open={depth < 2}>
-      <summary
-        className={`dom-tree-summary ${lineClass}`}
-        style={{ paddingLeft: `${depth * 16}px` }}
-        title={node.selector}
-      >
-        {lineContent}
-      </summary>
-      <div className="dom-tree-children">
-        {node.children.map((child) =>
-          renderDomTree(child, depth + 1, violationTargets),
-        )}
-        <div
-          className="dom-tree-line dom-tree-closing"
+    <StyledTooltip
+      key={node.selector}
+      content={node.selector}
+      className="dom-tree-tooltip"
+    >
+      <details className="dom-tree-details" open={depth < 2}>
+        <summary
+          className={`dom-tree-summary ${lineClass}`}
           style={{ paddingLeft: `${depth * 16}px` }}
         >
-          <span className="dom-tree-tag">
-            &lt;/{node.tagName}
-            {">"}
-          </span>
+          {lineContent}
+        </summary>
+        <div className="dom-tree-children">
+          {node.children.map((child) =>
+            renderDomTree(child, depth + 1, violationTargets),
+          )}
+          <div
+            className="dom-tree-line dom-tree-closing"
+            style={{ paddingLeft: `${depth * 16}px` }}
+          >
+            <span className="dom-tree-tag">
+              &lt;/{node.tagName}
+              {">"}
+            </span>
+          </div>
         </div>
-      </div>
-    </details>
+      </details>
+    </StyledTooltip>
   );
 }
 
