@@ -812,6 +812,31 @@ function renderDomTree(
   const isVoid = VOID_ELEMENTS.has(node.tagName);
   const violationMeta = violationTargets.get(node.selector);
   const hasChildren = node.children && node.children.length > 0;
+  const bodyChildOpenTags = new Set([
+    "main",
+    "header",
+    "nav",
+    "section",
+    "article",
+    "aside",
+    "footer",
+    "form",
+    "search",
+  ]);
+  const bodyChildOpenRoles = new Set([
+    "main",
+    "navigation",
+    "banner",
+    "contentinfo",
+    "complementary",
+    "search",
+  ]);
+  const role = (node.attributes.role || "").toLowerCase();
+  const shouldOpenByDefault =
+    node.tagName === "html" ||
+    node.tagName === "body" ||
+    (depth === 2 &&
+      (bodyChildOpenTags.has(node.tagName) || bodyChildOpenRoles.has(role)));
   const visibleAttributes = Object.entries(node.attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
   );
@@ -858,7 +883,7 @@ function renderDomTree(
         content={node.selector}
         className="dom-tree-tooltip"
       >
-        <div className={lineClass} style={{ marginLeft: `${depth * 16}px` }}>
+        <div className={lineClass} style={{ marginLeft: `${depth + 8}px` }}>
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
               &lt;
@@ -947,7 +972,9 @@ function renderDomTree(
                 content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
                 className="dom-badge-tooltip"
               >
-                <span className="dom-badge aria-referenced">\u2190REF</span>
+                <span className="dom-badge aria-referenced">
+                  {referencedBy.map((r) => `aria-${r.type}`).join(", ")}
+                </span>
               </StyledTooltip>
             )}
           </span>
@@ -964,7 +991,7 @@ function renderDomTree(
         content={node.selector}
         className="dom-tree-tooltip"
       >
-        <div className={lineClass} style={{ marginLeft: `${depth * 16}px` }}>
+        <div className={lineClass} style={{ marginLeft: `${depth + 8}px` }}>
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
               &lt;
@@ -1035,7 +1062,9 @@ function renderDomTree(
                 content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
                 className="dom-badge-tooltip"
               >
-                <span className="dom-badge aria-referenced">←REF</span>
+                <span className="dom-badge aria-referenced">
+                  {referencedBy.map((r) => `aria-${r.type}`).join(", ")}
+                </span>
               </StyledTooltip>
             )}
           </span>
@@ -1117,7 +1146,9 @@ function renderDomTree(
             content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
             className="dom-badge-tooltip"
           >
-            <span className="dom-badge aria-referenced">←REF</span>
+            <span className="dom-badge aria-referenced">
+              {referencedBy.map((r) => `aria-${r.type}`).join(", ")}
+            </span>
           </StyledTooltip>
         )}
       </span>
@@ -1132,12 +1163,11 @@ function renderDomTree(
     >
       <details
         className="dom-tree-details"
-        open={depth < 2 && node.tagName !== "head"}
+        data-depth={depth}
+        open={shouldOpenByDefault}
+        style={{ marginLeft: `${depth + 8}px` }}
       >
-        <summary
-          className={`dom-tree-summary ${lineClass}`}
-          style={{ marginLeft: `${depth * 16}px` }}
-        >
+        <summary className={`dom-tree-summary ${lineClass}`}>
           {lineContent}
         </summary>
         <div className="dom-tree-children">
@@ -1149,25 +1179,22 @@ function renderDomTree(
               ariaRelationships,
             ),
           )}
-          <div
-            className={`${lineClass} dom-tree-closing`}
-            style={{ marginLeft: `${depth * 16}px` }}
-          >
-            <span className="dom-tree-tag">
-              &lt;/
-              {isSemantic ? (
-                <StyledTooltip
-                  content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
-                  className="dom-badge-tooltip"
-                >
-                  <span>{node.tagName}</span>
-                </StyledTooltip>
-              ) : (
-                node.tagName
-              )}
-              {">"}
-            </span>
-          </div>
+        </div>
+        <div className={`${lineClass} dom-tree-closing`}>
+          <span className="dom-tree-tag">
+            &lt;/
+            {isSemantic ? (
+              <StyledTooltip
+                content={`[HTML] ${getSemanticTagDescription(node.tagName)}`}
+                className="dom-badge-tooltip"
+              >
+                <span>{node.tagName}</span>
+              </StyledTooltip>
+            ) : (
+              node.tagName
+            )}
+            {">"}
+          </span>
         </div>
       </details>
     </StyledTooltip>

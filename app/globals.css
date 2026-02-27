@@ -1198,7 +1198,7 @@ input[type="text"]:focus {
   border-radius: 8px;
   padding: 12px;
   font-family: "SFMono-Regular", "Menlo", "Monaco", "Courier New", monospace;
-  font-size: 0.8rem;
+  font-size: 14px;
   overflow-x: auto;
 }
 
@@ -1221,12 +1221,16 @@ input[type="text"]:focus {
   color: #94a3b8;
   margin-right: 6px;
   transition: all 0.15s ease;
+  position: absolute;
+  left: 0;
 }
 
 .dom-tree-details[open] > .dom-tree-summary::before {
   content: "▾";
   color: #60a5fa;
   transform: none;
+  position: absolute;
+  left: 0;
 }
 
 .dom-tree-summary::-webkit-details-marker {
@@ -1234,10 +1238,11 @@ input[type="text"]:focus {
 }
 
 .dom-tree-line {
-  display: flex;
-  align-items: baseline;
-  padding: 2px 0;
   white-space: nowrap;
+  align-items: baseline;
+  padding: 2px 0 2px 20px;
+  display: flex;
+  position: relative;
 }
 
 .dom-tree-children {
@@ -1252,8 +1257,46 @@ input[type="text"]:focus {
   border: 1px solid rgba(96, 165, 250, 0.3);
   border-radius: 4px;
   padding: 6px 8px;
-  margin: 4px 0 4px 4px;
-  background: rgba(30, 58, 138, 0.15);
+  margin: 4px 0;
+  background: #08090d26;
+}
+
+.dom-tree-details[data-depth="0"][open] > .dom-tree-children {
+  border-color: rgba(56, 189, 248, 0.65);
+}
+
+.dom-tree-details[data-depth="1"][open] > .dom-tree-children {
+  border-color: rgba(99, 102, 241, 0.52);
+}
+
+.dom-tree-details[data-depth="2"][open] > .dom-tree-children {
+  border-color: rgba(139, 92, 246, 0.5);
+}
+
+.dom-tree-details[data-depth="3"][open] > .dom-tree-children {
+  border-color: rgba(168, 85, 247, 0.48);
+}
+
+.dom-tree-details[data-depth="4"][open] > .dom-tree-children {
+  border-color: rgba(217, 70, 239, 0.46);
+}
+
+.dom-tree-details[data-depth="5"][open] > .dom-tree-children {
+  border-color: rgba(236, 72, 153, 0.44);
+}
+
+.dom-tree-details[data-depth="6"][open] > .dom-tree-children {
+  border-color: rgba(244, 63, 94, 0.42);
+}
+
+.dom-tree-details[data-depth="7"][open] > .dom-tree-children {
+  border-color: rgba(251, 113, 133, 0.4);
+}
+
+.dom-tree-details[data-depth="8"][open] > .dom-tree-children,
+.dom-tree-details[data-depth="9"][open] > .dom-tree-children,
+.dom-tree-details[data-depth="10"][open] > .dom-tree-children {
+  border-color: rgba(251, 146, 60, 0.4);
 }
 
 .dom-tree-tag {
