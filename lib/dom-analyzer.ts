@@ -49,12 +49,21 @@ export interface FocusableElement {
   announcement: string;
 }
 
+export interface DOMTreeNode {
+  tagName: string;
+  selector: string;
+  attributes: Record<string, string>;
+  textSnippet?: string;
+  children: DOMTreeNode[];
+}
+
 export interface DOMAnalysis {
   headings: HeadingItem[];
   landmarks: LandmarkItem[];
   roles: RoleItem[];
   forms: FormItem[];
   focusable: FocusableElement[];
+  domTree?: DOMTreeNode;
   summary: {
     totalHeadings: number;
     totalLandmarks: number;
@@ -172,6 +181,7 @@ export function analyzeDOMStructure(domData: {
     role?: string;
     tabindex?: string;
   }>;
+  domTree?: DOMTreeNode;
 }): DOMAnalysis {
   const headings = domData.headings.map((h) => ({
     ...h,
@@ -260,6 +270,7 @@ export function analyzeDOMStructure(domData: {
     roles,
     forms,
     focusable,
+    domTree: domData.domTree,
     summary: {
       totalHeadings: headings.length,
       totalLandmarks: landmarks.length,

@@ -1190,6 +1190,177 @@ input[type="text"]:focus {
   border-radius: 4px;
 }
 
+/* Interactive DOM Tree */
+.dom-tree {
+  background: #0b1220;
+  color: #e2e8f0;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 12px;
+  font-family: "SFMono-Regular", "Menlo", "Monaco", "Courier New", monospace;
+  font-size: 0.8rem;
+  overflow-x: auto;
+}
+
+.dom-tree-details {
+  margin: 2px 0;
+  display: inline-block;
+}
+
+.dom-tree-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.dom-tree-details > .dom-tree-summary::before {
+  content: "▸";
+  color: #94a3b8;
+  margin-right: 6px;
+  transition: all 0.15s ease;
+}
+
+.dom-tree-details[open] > .dom-tree-summary::before {
+  content: "▾";
+  color: #60a5fa;
+  transform: none;
+}
+
+.dom-tree-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dom-tree-line {
+  display: flex;
+  align-items: baseline;
+  padding: 2px 0;
+  white-space: nowrap;
+}
+
+.dom-tree-children {
+  margin-left: 0;
+  display: flex;
+  flex-direction: column;
+  width: fit-content;
+  min-width: 100%;
+}
+
+.dom-tree-details[open] > .dom-tree-children {
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0 4px 8px;
+  background: rgba(30, 58, 138, 0.15);
+}
+
+.dom-tree-tag {
+  color: #38bdf8;
+}
+
+.dom-tree-semantic .dom-tree-tag {
+  color: #fbbf24;
+}
+
+.dom-tree-violation {
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 2px solid #ef4444;
+}
+
+.dom-tree-text {
+  color: #cbd5f5;
+  margin-left: 6px;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dom-tree-closing {
+  color: #94a3b8;
+}
+
+.dom-attr {
+  color: #93c5fd;
+  margin-left: 6px;
+}
+
+.dom-attr-name {
+  color: #a5b4fc;
+}
+
+.dom-attr-value {
+  color: #f9a8d4;
+}
+
+.dom-attr.role .dom-attr-name {
+  color: #fb923c;
+}
+
+.dom-attr.aria .dom-attr-name {
+  color: #d97706;
+}
+
+.dom-attr.focus .dom-attr-name {
+  color: #22c55e;
+}
+
+.dom-attr.label .dom-attr-name {
+  color: #eab308;
+}
+
+.dom-attr.id .dom-attr-name {
+  color: #f87171;
+}
+
+.dom-attr.link .dom-attr-name {
+  color: #38bdf8;
+}
+
+.dom-attr.state .dom-attr-name {
+  color: #f472b6;
+}
+
+.dom-attr-more {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.dom-tree-badges {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+.dom-badge {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dom-badge.html5 {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+}
+
+.dom-badge.aria {
+  background: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+}
+
+.dom-badge.axe {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.dom-badge.wcag {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
 .warning-banner,
 .success-banner {
   margin: 0 0 12px 0;
@@ -1636,4 +1807,117 @@ input[type="text"]:focus {
   .dom-summary {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+/* Enhanced Tooltip Styling */
+/* Custom tooltip styling for better visual appearance */
+
+/* Apply to all elements with title attributes */
+[title] {
+  /* Cursor indicates tooltip availability */
+  cursor: help;
+  position: relative;
+}
+
+/* Browser-level tooltip styling (works with native title attribute) */
+::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+/* Enhanced styling for ARIA attributes and badges with tooltips */
+.dom-attr[title],
+.dom-badge[title] {
+  border-bottom: 2px dotted rgba(96, 165, 250, 0.4);
+  transition: all 0.2s ease;
+}
+
+.dom-attr[title]:hover,
+.dom-badge[title]:hover {
+  border-bottom-color: rgba(96, 165, 250, 0.7);
+  background-color: rgba(96, 165, 250, 0.05);
+  border-radius: 2px;
+  padding: 1px 3px;
+}
+
+/* Specific styling for ARIA attributes */
+.dom-attr.aria[title] {
+  border-bottom-color: rgba(217, 119, 6, 0.4);
+}
+
+.dom-attr.aria[title]:hover {
+  border-bottom-color: rgba(217, 119, 6, 0.8);
+  background-color: rgba(217, 119, 6, 0.05);
+}
+
+/* Specific styling for role badge */
+.dom-badge.aria[title] {
+  border-bottom: 2px dotted rgba(96, 165, 250, 0.5);
+}
+
+.dom-badge.aria[title]:hover {
+  background-color: rgba(96, 165, 250, 0.15);
+  border-radius: 3px;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(96, 165, 250, 0.2);
+}
+
+.dom-badge.axe[title]:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+  border-radius: 3px;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2);
+}
+
+.dom-badge.wcag[title]:hover {
+  background-color: rgba(34, 197, 94, 0.15);
+  border-radius: 3px;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(34, 197, 94, 0.2);
+}
+
+/* Pseudo-element for tooltip indicator (optional visual cue) */
+/* Using ::before to show a subtle indicator */
+@supports selector(::-webkit-any(:hover)) {
+  .dom-attr[title]::after {
+    content: "";
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    background: rgba(96, 165, 250, 0.3);
+    border-radius: 50%;
+    margin-left: 2px;
+    vertical-align: super;
+    font-size: 0.6em;
+  }
+
+  .dom-attr[title]:hover::after {
+    background: rgba(96, 165, 250, 0.7);
+  }
+
+  .dom-attr.aria[title]::after {
+    background: rgba(217, 119, 6, 0.3);
+  }
+
+  .dom-attr.aria[title]:hover::after {
+    background: rgba(217, 119, 6, 0.8);
+  }
+}
+
+/* Improve default browser tooltip appearance via CSS (cross-browser) */
+/* Note: Limited support in some browsers, but helps where available */
+[title] {
+  text-decoration-color: currentColor;
+  text-underline-offset: 0.2em;
+}
+
+/* Enhanced visual feedback on keyboard focus */
+[title]:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.5);
+  outline-offset: 2px;
+}
+
+.dom-attr[title]:focus-visible,
+.dom-badge[title]:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.7);
+  outline-offset: 1px;
+  border-radius: 2px;
 }

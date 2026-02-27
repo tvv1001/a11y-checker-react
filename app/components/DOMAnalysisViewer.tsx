@@ -1,7 +1,8 @@
 "use client";
 
-import type { DOMAnalysis } from "@/lib/dom-analyzer";
+import type { DOMAnalysis, DOMTreeNode } from "@/lib/dom-analyzer";
 import type { Violation } from "@/lib/types";
+import { getARIARole } from "@/lib/aria-roles-reference";
 
 interface DOMAnalysisViewerProps {
   analysis: DOMAnalysis;
@@ -266,12 +267,378 @@ function filterSequentialHeadings(
   });
 }
 
+const SEMANTIC_TAGS = new Set([
+  "header",
+  "nav",
+  "main",
+  "section",
+  "article",
+  "aside",
+  "footer",
+  "form",
+  "label",
+  "button",
+  "a",
+  "input",
+  "select",
+  "textarea",
+  "img",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "ul",
+  "ol",
+  "li",
+]);
+
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+const MAX_ATTRS_PER_NODE = 12;
+
+function getAttributeClass(attributeName: string) {
+  if (attributeName === "role") return "dom-attr role";
+  if (attributeName.startsWith("aria-")) return "dom-attr aria";
+  if (attributeName === "tabindex") return "dom-attr focus";
+  if (["alt", "title", "placeholder", "for"].includes(attributeName)) {
+    return "dom-attr label";
+  }
+  if (["id", "name"].includes(attributeName)) {
+    return "dom-attr id";
+  }
+  if (["href", "src"].includes(attributeName)) return "dom-attr link";
+  if (["required", "disabled", "readonly"].includes(attributeName)) {
+    return "dom-attr state";
+  }
+  return "dom-attr";
+}
+
+function getARIAAttributeTooltip(name: string, value: string): string {
+  const ariaAttributeInfo: Record<string, string> = {
+    "aria-label":
+      "Provides an accessible name. Used when there is no visible text label. Screen readers announce: ",
+    "aria-labelledby":
+      "Links to element(s) that label this element using their ID. Provides accessible name from linked element(s). Screen readers announce: ",
+    "aria-describedby":
+      "Links to element(s) that describe this element. Provides extended description. Screen readers announce: ",
+    "aria-value":
+      "Indicates the current value of a range widget (slider, progress bar, etc.)",
+    "aria-valuemin": "Indicates the minimum value for a range widget",
+    "aria-valuemax": "Indicates the maximum value for a range widget",
+    "aria-valuenow": "Indicates the current numeric value for a range widget",
+    "aria-hidden":
+      "Tells assistive tech to hide element. Use only on decorative/duplicate content",
+    "aria-live":
+      "Announces dynamic content updates. polite=waits for pause, assertive=interrupts",
+    "aria-atomic":
+      "When true, announces entire region on update, not just changes",
+    "aria-relevant":
+      "Specifies what dynamic changes trigger announcements (additions, removals, text, all)",
+    "aria-busy": "Indicates asynchronous operation in progress (true/false)",
+    "aria-pressed":
+      "For toggle buttons. Indicates button state: true, false, or mixed",
+    "aria-current":
+      "Marks the element as representing the current item (page, step, location, time, etc.)",
+    "aria-expanded": "For collapsible elements. true=expanded, false=collapsed",
+    "aria-disabled":
+      "Indicates whether element is disabled. Note: use HTML disabled attribute when possible",
+    "aria-readonly": "Indicates element should not be modified by user",
+    "aria-required":
+      "Indicates form field is required. Note: use HTML required attribute when possible",
+    "aria-invalid":
+      "Indicates field has invalid data. true=invalid, false=valid, grammar/spelling for type",
+    "aria-checked":
+      "For checkboxes/radio buttons. true=checked, false=unchecked, mixed=partially checked",
+    "aria-selected": "For selectable items. true=selected, false=not selected",
+    "aria-modal": "For dialogs. true=modal (traps focus), false=modeless",
+    "aria-sort":
+      "For sortable columns. ascending/descending/none/other to indicate sort direction",
+    "aria-rowcount": "Number of rows in a table/grid (use with aria-rowindex)",
+    "aria-colcount": "Number of columns in a table/grid",
+    "aria-rowindex": "Row position in table/grid structure",
+    "aria-colindex": "Column position in table/grid structure",
+    "aria-level":
+      "For headings in non-h1-h6 elements. Value 1-6 indicates heading level",
+    "aria-multiline":
+      "For textbox role. Indicates if single-line or multi-line input",
+    "aria-readonly": "Indicates content cannot be modified",
+    "aria-owns":
+      "Establishes parent-child relationship for elements not in DOM hierarchy",
+    "aria-controls": "Indicates this element controls another element by ID",
+    "aria-flowto":
+      "Indicates reading order. Used to override natural DOM order",
+  };
+
+  const description = ariaAttributeInfo[name] || `${name} attribute`;
+  const tooltip = `${description}"${value}"`;
+  return tooltip;
+}
+
+function renderAttributes(attributes: Record<string, string>) {
+  const entries = Object.entries(attributes).filter(
+    ([name]) => name !== "class" && name !== "style",
+  );
+  const visible = entries.slice(0, MAX_ATTRS_PER_NODE);
+  const hiddenCount = entries.length - visible.length;
+
+  if (visible.length === 0 && hiddenCount === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      {visible.map(([name, value]) => {
+        const isAriaAttribute = name.startsWith("aria-");
+        const title = isAriaAttribute
+          ? getARIAAttributeTooltip(name, value)
+          : undefined;
+
+        return (
+          <span key={name} className={getAttributeClass(name)} title={title}>
+            <span className="dom-attr-name">{name}</span>
+            <span className="dom-attr-equals">=</span>
+            <span className="dom-attr-value">&quot;{value}&quot;</span>
+          </span>
+        );
+      })}
+      {hiddenCount > 0 && (
+        <span className="dom-attr dom-attr-more">+{hiddenCount} more</span>
+      )}
+    </>
+  );
+}
+
+function buildViolationTargetMap(violations: Violation[]) {
+  const map = new Map<
+    string,
+    { count: number; hasWcag: boolean; hasAxe: boolean }
+  >();
+
+  violations.forEach((violation) => {
+    const hasWcag = (violation.tags || []).some((tag) =>
+      tag.toLowerCase().startsWith("wcag"),
+    );
+    const hasAxe = true;
+
+    violation.nodes.forEach((node) => {
+      (node.target || []).forEach((selector) => {
+        const existing = map.get(selector);
+        if (existing) {
+          existing.count += 1;
+          existing.hasWcag = existing.hasWcag || hasWcag;
+          existing.hasAxe = existing.hasAxe || hasAxe;
+        } else {
+          map.set(selector, {
+            count: 1,
+            hasWcag,
+            hasAxe,
+          });
+        }
+      });
+    });
+  });
+
+  return map;
+}
+
+function getARIARoleTooltip(roleName: string): string {
+  const roleData = getARIARole(roleName);
+  if (!roleData) {
+    return `Role: ${roleName}`;
+  }
+  return `${roleName} (${roleData.category}): ${roleData.description}`;
+}
+
+function renderDomTree(
+  node: DOMTreeNode,
+  depth: number,
+  violationTargets: Map<
+    string,
+    { count: number; hasWcag: boolean; hasAxe: boolean }
+  >,
+) {
+  const isSemantic = SEMANTIC_TAGS.has(node.tagName);
+  const isVoid = VOID_ELEMENTS.has(node.tagName);
+  const violationMeta = violationTargets.get(node.selector);
+  const hasChildren = node.children && node.children.length > 0;
+  const lineClass = [
+    "dom-tree-line",
+    isSemantic ? "dom-tree-semantic" : "",
+    violationMeta ? "dom-tree-violation" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  // For elements without children (but not void), show complete tag with closing on same line
+  if (!hasChildren && !isVoid) {
+    return (
+      <div
+        key={node.selector}
+        className={lineClass}
+        style={{ paddingLeft: `${depth * 16}px` }}
+        title={node.selector}
+      >
+        {Object.keys(node.attributes).length === 0 ? (
+          <span className="dom-tree-tag">
+            &lt;{node.tagName}
+            {">"}{" "}
+          </span>
+        ) : (
+          <>
+            <span className="dom-tree-tag">&lt;{node.tagName}</span>
+            {renderAttributes(node.attributes)}
+            <span className="dom-tree-tag">{">"}</span>
+          </>
+        )}
+        {node.textSnippet && (
+          <span className="dom-tree-text">{node.textSnippet}</span>
+        )}
+        <span className="dom-tree-tag">
+          &lt;/{node.tagName}
+          {">"}
+        </span>
+        <span className="dom-tree-badges">
+          {node.attributes.role && (
+            <span
+              className="dom-badge aria"
+              title={getARIARoleTooltip(node.attributes.role)}
+            >
+              ROLE
+            </span>
+          )}
+          {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
+          {violationMeta?.hasWcag && (
+            <span className="dom-badge wcag">WCAG</span>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  // For void elements (self-closing)
+  if (isVoid) {
+    return (
+      <div
+        key={node.selector}
+        className={lineClass}
+        style={{ paddingLeft: `${depth * 16}px` }}
+        title={node.selector}
+      >
+        {Object.keys(node.attributes).length === 0 ? (
+          <span className="dom-tree-tag">
+            &lt;{node.tagName}
+            {"/>"}{" "}
+          </span>
+        ) : (
+          <>
+            <span className="dom-tree-tag">&lt;{node.tagName}</span>
+            {renderAttributes(node.attributes)}
+            <span className="dom-tree-tag">{"/>"} </span>
+          </>
+        )}
+        <span className="dom-tree-badges">
+          {node.attributes.role && (
+            <span
+              className="dom-badge aria"
+              title={getARIARoleTooltip(node.attributes.role)}
+            >
+              ROLE
+            </span>
+          )}
+          {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
+          {violationMeta?.hasWcag && (
+            <span className="dom-badge wcag">WCAG</span>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  // For elements with children - collapsible
+  const lineContent = (
+    <>
+      {Object.keys(node.attributes).length === 0 ? (
+        <span className="dom-tree-tag">
+          &lt;{node.tagName}
+          {">"}{" "}
+        </span>
+      ) : (
+        <>
+          <span className="dom-tree-tag">&lt;{node.tagName}</span>
+          {renderAttributes(node.attributes)}
+          <span className="dom-tree-tag">{">"}</span>
+        </>
+      )}
+      {node.textSnippet && (
+        <span className="dom-tree-text">{node.textSnippet}</span>
+      )}
+      <span className="dom-tree-badges">
+        {node.attributes.role && (
+          <span
+            className="dom-badge aria"
+            title={getARIARoleTooltip(node.attributes.role)}
+          >
+            ROLE
+          </span>
+        )}
+        {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
+        {violationMeta?.hasWcag && <span className="dom-badge wcag">WCAG</span>}
+      </span>
+    </>
+  );
+
+  return (
+    <details key={node.selector} className="dom-tree-details" open={depth < 2}>
+      <summary
+        className={`dom-tree-summary ${lineClass}`}
+        style={{ paddingLeft: `${depth * 16}px` }}
+        title={node.selector}
+      >
+        {lineContent}
+      </summary>
+      <div className="dom-tree-children">
+        {node.children.map((child) =>
+          renderDomTree(child, depth + 1, violationTargets),
+        )}
+        <div
+          className="dom-tree-line dom-tree-closing"
+          style={{ paddingLeft: `${depth * 16}px` }}
+        >
+          <span className="dom-tree-tag">
+            &lt;/{node.tagName}
+            {">"}
+          </span>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export function DOMAnalysisViewer({
   analysis,
   violations = [],
 }: DOMAnalysisViewerProps) {
-  const { headings, landmarks, roles, forms, focusable, summary } = analysis;
+  const { headings, landmarks, roles, forms, focusable, summary, domTree } =
+    analysis;
   const aaViolations = violations.filter(isAALevelViolation);
+  const violationTargets = buildViolationTargetMap(violations);
 
   return (
     <div className="dom-analysis-section">
@@ -283,6 +650,21 @@ export function DOMAnalysisViewer({
             " (showing JAWS details for AA level issues)"}
         </p>
       </div>
+
+      {domTree && (
+        <div className="dom-section">
+          <h3 className="dom-section-title">
+            <span className="section-icon">🧭</span> Interactive DOM Tree
+          </h3>
+          <p className="section-hint">
+            Expand any line to explore children. ARIA, WCAG, AXE, and HTML5
+            semantics are highlighted.
+          </p>
+          <div className="dom-tree">
+            {renderDomTree(domTree, 0, violationTargets)}
+          </div>
+        </div>
+      )}
 
       {/* Summary */}
       <div className="dom-summary">
@@ -531,7 +913,8 @@ export function DOMAnalysisViewer({
         landmarks.length === 0 &&
         roles.length === 0 &&
         forms.length === 0 &&
-        focusable.length === 0 && (
+        focusable.length === 0 &&
+        !domTree && (
           <div className="empty-state">
             <p>
               No DOM structure elements found. The page may not have headings,

@@ -89,6 +89,141 @@ async function extractDOMStructure(
         required?: boolean;
       }> = [];
 
+      const MAX_DOM_DEPTH = 25;
+      const MAX_CHILDREN_PER_NODE = 200;
+      const MAX_TEXT_LENGTH = 100;
+
+      const escapeId = (value: string) => {
+        if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+          return CSS.escape(value);
+        }
+        return value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+      };
+
+      const buildSelector = (el: Element): string => {
+        if (el.id) {
+          return `#${escapeId(el.id)}`;
+        }
+
+        const parts: string[] = [];
+        let current: Element | null = el;
+
+        while (current && current.tagName.toLowerCase() !== "html") {
+          let selector = current.tagName.toLowerCase();
+          if (current.id) {
+            selector = `#${escapeId(current.id)}`;
+            parts.unshift(selector);
+            break;
+          }
+
+          const parent = current.parentElement;
+          if (parent) {
+            const siblings = Array.from(parent.children).filter(
+              (child) => child.tagName === current!.tagName,
+            );
+            if (siblings.length > 1) {
+              const index = siblings.indexOf(current) + 1;
+              selector += `:nth-of-type(${index})`;
+            }
+          }
+
+          parts.unshift(selector);
+          current = parent;
+        }
+
+        return parts.join(" > ");
+      };
+
+      const getTextSnippet = (el: Element): string | undefined => {
+        const text = Array.from(el.childNodes)
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => node.textContent || "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        if (!text) {
+          return undefined;
+        }
+
+        return text.length > MAX_TEXT_LENGTH
+          ? `${text.substring(0, MAX_TEXT_LENGTH)}...`
+          : text;
+      };
+
+      type DomTreeNode = {
+        tagName: string;
+        selector: string;
+        attributes: Record<string, string>;
+        textSnippet?: string;
+        children: DomTreeNode[];
+      };
+
+      const buildDomTree = (el: Element, depth: number): DomTreeNode | null => {
+        if (depth > MAX_DOM_DEPTH) {
+          return null;
+        }
+
+        const tagName = el.tagName.toLowerCase();
+        if (["script", "style", "noscript", "link"].includes(tagName)) {
+          return null;
+        }
+
+        // Filter out specific meta tags
+        if (tagName === "meta") {
+          const httpEquiv = el.getAttribute("http-equiv");
+          const name = el.getAttribute("name");
+          const property = el.getAttribute("property");
+
+          // Filter out origin-trial, next-head-count, application-name
+          if (httpEquiv === "origin-trial") {
+            return null;
+          }
+          if (
+            name === "next-head-count" ||
+            name === "application-name" ||
+            name === "robots"
+          ) {
+            return null;
+          }
+          // Filter out Open Graph and Twitter meta tags
+          if (property?.startsWith("og:") || name?.startsWith("twitter:")) {
+            return null;
+          }
+        }
+
+        const attributes: Record<string, string> = {};
+        Array.from(el.attributes).forEach((attr) => {
+          if (
+            attr.name === "class" ||
+            attr.name === "style" ||
+            attr.name.startsWith("data-")
+          ) {
+            return;
+          }
+          attributes[attr.name] = attr.value;
+        });
+
+        const children: DomTreeNode[] = [];
+        for (const child of Array.from(el.children)) {
+          if (children.length >= MAX_CHILDREN_PER_NODE) {
+            break;
+          }
+          const childNode = buildDomTree(child, depth + 1);
+          if (childNode) {
+            children.push(childNode);
+          }
+        }
+
+        return {
+          tagName,
+          selector: buildSelector(el),
+          attributes,
+          textSnippet: getTextSnippet(el),
+          children,
+        };
+      };
+
       // Extract headings
       document.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach((el) => {
         const level = parseInt(el.tagName[1]);
@@ -262,7 +397,10 @@ async function extractDOMStructure(
         };
       });
 
-      return { headings, landmarks, roles, forms, focusable };
+      // Build DOM tree from the entire document to capture full rendered HTML
+      const domTree = buildDomTree(document.documentElement, 0);
+
+      return { headings, landmarks, roles, forms, focusable, domTree };
     });
 
     return analyzeDOMStructure(domData);
@@ -338,8 +476,28 @@ export async function GET(request: NextRequest) {
     });
     addLog(sessionId, "success", "Page loaded successfully");
 
-    // Wait a bit for dynamic content to render
+    // Wait for network to settle to capture the final rendered DOM
+    try {
+      await page.waitForLoadState("networkidle", { timeout: 15000 });
+    } catch {
+      addLog(
+        sessionId,
+        "warning",
+        "Network idle timeout reached; continuing with best-effort DOM snapshot.",
+      );
+    }
+
+    // Wait for DOM content to fully load (including deferred scripts)
+    try {
+      await page.waitForLoadState("domcontentloaded", { timeout: 5000 });
+    } catch {
+      // Already loaded or timed out
+    }
+
+    // Allow late scripts to flush DOM mutations and dynamic content to render
     await page.waitForTimeout(2000);
+
+    addLog(sessionId, "success", "Final rendered DOM captured");
 
     // Inject a script to sanitize problematic DOM nodes before scanning
     await page.evaluate(() => {
@@ -449,17 +607,13 @@ export async function GET(request: NextRequest) {
     addLog(sessionId, "success", "Scan completed successfully");
 
     // Extract DOM structure for accessibility analysis
-    addLog(
-      sessionId,
-      "info",
-      "Analyzing DOM structure for JAWS screen reader...",
-    );
+    addLog(sessionId, "info", "Capturing full rendered HTML DOM structure...");
     const domAnalysis = await extractDOMStructure(page);
     if (domAnalysis) {
       addLog(
         sessionId,
         "success",
-        `Found ${domAnalysis.summary.totalHeadings} headings and ${domAnalysis.summary.totalLandmarks} landmarks`,
+        `DOM structure captured: ${domAnalysis.summary.totalHeadings} headings, ${domAnalysis.summary.totalLandmarks} landmarks, ${domAnalysis.domTree ? "interactive tree available" : "tree unavailable"}`,
       );
     }
 
