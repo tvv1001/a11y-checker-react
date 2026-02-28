@@ -425,6 +425,15 @@ function renderAttributes(
   attributes: Record<string, string>,
   elementTag?: string,
   matchInfo?: string[],
+  nodeSelector?: string,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
 ) {
   const entries = Object.entries(attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
@@ -453,10 +462,27 @@ function renderAttributes(
         const isAriaMatch = isAriaAttribute && matchInfo?.includes("aria");
         const isMatched = isRoleMatch || isAriaMatch;
 
+        // Check if this attribute is an ID that's referenced by other elements
+        const isReferencedId =
+          name === "id" &&
+          (ariaRelationships?.idToReferences.get(value)?.length ?? 0) > 0;
+
+        // Check if this attribute references other IDs via aria-labelledby/describedby
+        const isReferencingAttribute =
+          (name === "aria-labelledby" || name === "aria-describedby") &&
+          (ariaRelationships?.selectorToRelationships.get(nodeSelector ?? "")
+            ?.length ?? 0) > 0;
+
+        const hasAssociation = isReferencedId || isReferencingAttribute;
+
         const attributeClass = getAttributeClass(name);
-        const highlightedClass = isMatched
-          ? `${attributeClass} dom-attr-matched`
-          : attributeClass;
+        const highlightedClass = [
+          attributeClass,
+          isMatched ? "dom-attr-matched" : "",
+          hasAssociation ? "dom-attr-associated" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
 
         const badge = (
           <span className={highlightedClass}>
@@ -1079,10 +1105,15 @@ function renderDomTree(
   const isVoid = VOID_ELEMENTS.has(node.tagName);
   const violationMeta = violationTargets.get(node.selector);
   const hasChildren = node.children && node.children.length > 0;
-  const hasElementChildren =
+  const hasNonVoidElementChildren =
     node.children &&
     node.children.length > 0 &&
-    node.children.some((child) => child.tagName && child.tagName.length > 0);
+    node.children.some(
+      (child) =>
+        child.tagName &&
+        child.tagName.length > 0 &&
+        !VOID_ELEMENTS.has(child.tagName),
+    );
   const bodyChildOpenTags = new Set([
     "main",
     "header",
@@ -1131,6 +1162,8 @@ function renderDomTree(
   const hasRelationship = relationships && relationships.length > 0;
   const hasDescribedByRelationship =
     relationships?.some((rel) => rel.type === "describedby") ?? false;
+  const hasLabelledByRelationship =
+    relationships?.some((rel) => rel.type === "labelledby") ?? false;
 
   // Check if this element is referenced by others
   const elementId = node.attributes.id;
@@ -1170,8 +1203,13 @@ function renderDomTree(
     .filter(Boolean)
     .join(" ");
 
-  // For elements without element children (or describedby relationships), show complete tag with closing on same line
-  if ((!hasElementChildren || hasDescribedByRelationship) && !isVoid) {
+  // For elements without non-void children (or with ARIA relationships), show complete tag with closing on same line
+  if (
+    (!hasNonVoidElementChildren ||
+      hasDescribedByRelationship ||
+      hasLabelledByRelationship) &&
+    !isVoid
+  ) {
     return (
       <StyledTooltip
         key={node.selector}
@@ -1247,7 +1285,13 @@ function renderDomTree(
                   node.tagName
                 )}
               </span>
-              {renderAttributes(node.attributes, node.tagName, matchInfo)}
+              {renderAttributes(
+                node.attributes,
+                node.tagName,
+                matchInfo,
+                node.selector,
+                ariaRelationships,
+              )}
               <span className="dom-tree-tag">{">"}</span>
             </>
           )}
@@ -1464,7 +1508,13 @@ function renderDomTree(
               node.tagName
             )}
           </span>
-          {renderAttributes(node.attributes, node.tagName, matchInfo)}
+          {renderAttributes(
+            node.attributes,
+            node.tagName,
+            matchInfo,
+            node.selector,
+            ariaRelationships,
+          )}
           <span className="dom-tree-tag">{">"}</span>
         </>
       )}
