@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import type { DOMAnalysis, DOMTreeNode } from "@/lib/dom-analyzer";
 import type { Violation } from "@/lib/types";
 import { getARIARole } from "@/lib/aria-roles-reference";
@@ -8,54 +9,6 @@ import { StyledTooltip } from "./StyledTooltip";
 interface DOMAnalysisViewerProps {
   analysis: DOMAnalysis;
   violations?: Violation[];
-}
-
-function isAALevelViolation(violation: Violation): boolean {
-  const tags = violation.tags || [];
-  return tags.some(
-    (tag) =>
-      tag.toLowerCase().includes("wcag") &&
-      (tag.toLowerCase().includes("aa") || tag.toLowerCase().includes("aaa")),
-  );
-}
-
-function generateRoleHTML(
-  element: string,
-  role: string,
-  ariaLabel?: string,
-  label?: string,
-) {
-  return (
-    <div className="semantic-html-example">
-      <div className="html-tag">
-        <span className="tag-bracket">&lt;</span>
-        <span className="tag-name">{element}</span>
-        <span className="html-attribute role-attribute">
-          {" "}
-          <span className="attr-name highlight-role">role</span>
-          <span className="attr-equals">=</span>
-          <span className="attr-value">&quot;{role}&quot;</span>
-        </span>
-        {ariaLabel && (
-          <span className="html-attribute aria-attribute">
-            {" "}
-            <span className="attr-name highlight-aria">aria-label</span>
-            <span className="attr-equals">=</span>
-            <span className="attr-value">&quot;{ariaLabel}&quot;</span>
-          </span>
-        )}
-        <span className="tag-bracket">&gt;</span>
-        {label && (
-          <>
-            <span className="html-text">{label}</span>
-          </>
-        )}
-        <span className="tag-bracket">&lt;/</span>
-        <span className="tag-name">{element}</span>
-        <span className="tag-bracket">&gt;</span>
-      </div>
-    </div>
-  );
 }
 
 function generateFocusableHTML(
@@ -471,6 +424,7 @@ function getARIAAttributeTooltip(name: string, value: string): string {
 function renderAttributes(
   attributes: Record<string, string>,
   elementTag?: string,
+  matchInfo?: string[],
 ) {
   const entries = Object.entries(attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
@@ -494,8 +448,18 @@ function renderAttributes(
           ? getARIARoleTooltip(value, elementTag)
           : undefined;
 
+        // Check if this attribute matches the current filter
+        const isRoleMatch = isRoleAttribute && matchInfo?.includes("role");
+        const isAriaMatch = isAriaAttribute && matchInfo?.includes("aria");
+        const isMatched = isRoleMatch || isAriaMatch;
+
+        const attributeClass = getAttributeClass(name);
+        const highlightedClass = isMatched
+          ? `${attributeClass} dom-attr-matched`
+          : attributeClass;
+
         const badge = (
-          <span className={getAttributeClass(name)}>
+          <span className={highlightedClass}>
             <span className="dom-attr-name">{name}</span>
             <span className="dom-attr-equals">=</span>
             <span className="dom-attr-value">&quot;{value}&quot;</span>
@@ -511,7 +475,7 @@ function renderAttributes(
             {badge}
           </StyledTooltip>
         ) : (
-          <span key={name} className={getAttributeClass(name)}>
+          <span key={name} className={highlightedClass}>
             <span className="dom-attr-name">{name}</span>
             <span className="dom-attr-equals">=</span>
             <span className="dom-attr-value">&quot;{value}&quot;</span>
@@ -562,6 +526,13 @@ interface AriaRelationship {
   type: "labelledby" | "describedby";
   targetIds: string[];
   sourceSelector: string;
+}
+
+interface DomTreeFilters {
+  roles: string[]; // array of selected roles (empty = no filter)
+  ariaAttrs: string[]; // array of selected aria attributes (empty = no filter)
+  associationId: boolean;
+  keyword: string;
 }
 
 function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
@@ -792,6 +763,294 @@ function getSemanticTagDescription(tagName: string): string {
   return semanticTagDescriptions[tagName] || `HTML5 tag: ${tagName}`;
 }
 
+function collectRolesFromDomTree(node: DOMTreeNode | null): string[] {
+  if (!node) {
+    return [];
+  }
+
+  const roles = new Set<string>();
+
+  function traverse(current: DOMTreeNode) {
+    const role = current.attributes.role?.trim();
+    if (role) {
+      roles.add(role);
+    }
+    current.children?.forEach(traverse);
+  }
+
+  traverse(node);
+  return Array.from(roles).sort((a, b) => a.localeCompare(b));
+}
+
+function collectAriaAttributesFromDomTree(node: DOMTreeNode | null): string[] {
+  if (!node) {
+    return [];
+  }
+
+  const attrs = new Set<string>();
+
+  function traverse(current: DOMTreeNode) {
+    Object.keys(current.attributes).forEach((attr) => {
+      if (attr.startsWith("aria-")) {
+        attrs.add(attr);
+      }
+    });
+    current.children?.forEach(traverse);
+  }
+
+  traverse(node);
+  return Array.from(attrs).sort((a, b) => a.localeCompare(b));
+}
+
+function nodeMatchesDomTreeFilters(
+  node: DOMTreeNode,
+  filters: DomTreeFilters,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
+): boolean {
+  if (filters.roles.length > 0) {
+    const nodeRole = node.attributes.role?.trim();
+    if (!nodeRole || !filters.roles.includes(nodeRole)) {
+      return false;
+    }
+  }
+
+  if (filters.ariaAttrs.length > 0) {
+    const hasMatchingAria = Object.keys(node.attributes).some(
+      (attr) => attr.startsWith("aria-") && filters.ariaAttrs.includes(attr),
+    );
+    if (!hasMatchingAria) {
+      return false;
+    }
+  }
+
+  if (filters.associationId) {
+    const relationships =
+      ariaRelationships?.selectorToRelationships.get(node.selector) || [];
+    const isSourceAssociation = relationships.length > 0;
+
+    const elementId = node.attributes.id;
+    const isTargetAssociation =
+      elementId &&
+      (ariaRelationships?.idToReferences.get(elementId)?.length || 0) > 0;
+
+    if (!isSourceAssociation && !isTargetAssociation) {
+      return false;
+    }
+  }
+
+  if (filters.keyword.trim()) {
+    const keywordFilter = filters.keyword.trim().toLowerCase();
+    const keywordHaystack = [
+      node.tagName,
+      node.selector,
+      node.textSnippet || "",
+      ...Object.entries(node.attributes).flatMap(([name, value]) => [
+        name,
+        value,
+      ]),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    if (!keywordHaystack.includes(keywordFilter)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getNodeMatchInfo(
+  node: DOMTreeNode,
+  filters: DomTreeFilters,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
+): string[] {
+  const matches: string[] = [];
+
+  if (filters.roles.length > 0) {
+    const nodeRole = node.attributes.role?.trim();
+    if (nodeRole && filters.roles.includes(nodeRole)) {
+      matches.push("role");
+    }
+  }
+
+  if (filters.ariaAttrs.length > 0) {
+    const hasMatchingAria = Object.keys(node.attributes).some(
+      (attr) => attr.startsWith("aria-") && filters.ariaAttrs.includes(attr),
+    );
+    if (hasMatchingAria) {
+      matches.push("aria");
+    }
+  }
+
+  if (filters.associationId) {
+    const relationships =
+      ariaRelationships?.selectorToRelationships.get(node.selector) || [];
+    const isSourceAssociation = relationships.length > 0;
+
+    const elementId = node.attributes.id;
+    const isTargetAssociation =
+      elementId &&
+      (ariaRelationships?.idToReferences.get(elementId)?.length || 0) > 0;
+
+    if (isSourceAssociation || isTargetAssociation) {
+      matches.push("association");
+    }
+  }
+
+  if (filters.keyword.trim()) {
+    const keywordFilter = filters.keyword.trim().toLowerCase();
+    const keywordHaystack = [
+      node.tagName,
+      node.selector,
+      node.textSnippet || "",
+      ...Object.entries(node.attributes).flatMap(([name, value]) => [
+        name,
+        value,
+      ]),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    if (keywordHaystack.includes(keywordFilter)) {
+      matches.push("keyword");
+    }
+  }
+
+  return matches;
+}
+
+function filterDomTreeByFilters(
+  node: DOMTreeNode,
+  filters: DomTreeFilters,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
+): DOMTreeNode | null {
+  const hasActiveFilters = Object.values(filters).some((value) => {
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    return value.trim().length > 0;
+  });
+  if (!hasActiveFilters) {
+    return node;
+  }
+
+  const filteredChildren = (node.children || [])
+    .map((child) => filterDomTreeByFilters(child, filters, ariaRelationships))
+    .filter((child): child is DOMTreeNode => child !== null);
+
+  const currentNodeMatches = nodeMatchesDomTreeFilters(
+    node,
+    filters,
+    ariaRelationships,
+  );
+
+  if (!currentNodeMatches && filteredChildren.length === 0) {
+    return null;
+  }
+
+  const resultChildren = currentNodeMatches
+    ? (node.children ?? [])
+    : filteredChildren;
+
+  return {
+    ...node,
+    children: resultChildren,
+  };
+}
+
+function canRoleProduceMatches(
+  role: string,
+  currentFilters: DomTreeFilters,
+  domTree: DOMTreeNode | null,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
+): boolean {
+  if (!domTree) return false;
+
+  // Create a test filter with just this role + keep other active filters
+  const testFilters: DomTreeFilters = {
+    roles: [role],
+    ariaAttrs: currentFilters.ariaAttrs,
+    associationId: currentFilters.associationId,
+    keyword: currentFilters.keyword,
+  };
+
+  // Check if any node matches this combination
+  function hasMatch(node: DOMTreeNode): boolean {
+    if (nodeMatchesDomTreeFilters(node, testFilters, ariaRelationships)) {
+      return true;
+    }
+    return (node.children || []).some(hasMatch);
+  }
+
+  return hasMatch(domTree);
+}
+
+function canAriaAttrProduceMatches(
+  ariaAttr: string,
+  currentFilters: DomTreeFilters,
+  domTree: DOMTreeNode | null,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
+): boolean {
+  if (!domTree) return false;
+
+  // Create a test filter with just this aria attribute + keep other active filters
+  const testFilters: DomTreeFilters = {
+    roles: currentFilters.roles,
+    ariaAttrs: [ariaAttr],
+    associationId: currentFilters.associationId,
+    keyword: currentFilters.keyword,
+  };
+
+  // Check if any node matches this combination
+  function hasMatch(node: DOMTreeNode): boolean {
+    if (nodeMatchesDomTreeFilters(node, testFilters, ariaRelationships)) {
+      return true;
+    }
+    return (node.children || []).some(hasMatch);
+  }
+
+  return hasMatch(domTree);
+}
+
 function renderDomTree(
   node: DOMTreeNode,
   depth: number,
@@ -807,11 +1066,23 @@ function renderDomTree(
       { selector: string; type: "labelledby" | "describedby" }[]
     >;
   },
+  forceExpandAll = false,
+  filters?: DomTreeFilters,
+  lineCounter?: { current: number },
 ) {
+  const lineNumber = lineCounter ? ++lineCounter.current : undefined;
+  const matchInfo = filters
+    ? getNodeMatchInfo(node, filters, ariaRelationships)
+    : [];
+  const hasMatches = matchInfo.length > 0;
   const isSemantic = SEMANTIC_TAGS.has(node.tagName);
   const isVoid = VOID_ELEMENTS.has(node.tagName);
   const violationMeta = violationTargets.get(node.selector);
   const hasChildren = node.children && node.children.length > 0;
+  const hasElementChildren =
+    node.children &&
+    node.children.length > 0 &&
+    node.children.some((child) => child.tagName && child.tagName.length > 0);
   const bodyChildOpenTags = new Set([
     "main",
     "header",
@@ -837,6 +1108,7 @@ function renderDomTree(
     node.tagName === "body" ||
     (depth === 2 &&
       (bodyChildOpenTags.has(node.tagName) || bodyChildOpenRoles.has(role)));
+  const shouldBeOpen = forceExpandAll || shouldOpenByDefault;
   const visibleAttributes = Object.entries(node.attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
   );
@@ -865,25 +1137,71 @@ function renderDomTree(
     : undefined;
   const isReferenced = referencedBy && referencedBy.length > 0;
 
+  // Build association info for display
+  const associationInfo = (() => {
+    const info: string[] = [];
+    if (hasRelationship) {
+      relationships!.forEach((rel) => {
+        info.push(`${rel.type}: ${rel.targetIds.join(", ")}`);
+      });
+    }
+    if (isReferenced) {
+      info.push(
+        `referenced by: ${referencedBy!.map((r) => r.type).join(", ")}`,
+      );
+    }
+    return info.length > 0 ? info.join(" | ") : null;
+  })();
+
+  const showAssociationInfo =
+    filters?.associationId && (hasRelationship || isReferenced);
+
   const lineClass = [
     "dom-tree-line",
     isSemantic ? "dom-tree-semantic" : "",
     violationMeta ? "dom-tree-violation" : "",
     hasRelationship ? "dom-tree-has-relationship" : "",
     isReferenced ? "dom-tree-is-referenced" : "",
+    showAssociationInfo ? "dom-tree-association-highlight" : "",
+    hasMatches ? "dom-tree-match" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
-  // For elements without children (but not void), show complete tag with closing on same line
-  if (!hasChildren && !isVoid) {
+  // For elements without element children (but not void), show complete tag with closing on same line
+  if (!hasElementChildren && !isVoid) {
     return (
       <StyledTooltip
         key={node.selector}
         content={node.selector}
         className="dom-tree-tooltip"
       >
-        <div className={lineClass} style={{ marginLeft: `${depth + 8}px` }}>
+        <div
+          className={lineClass}
+          style={{ marginLeft: `${depth + 8}px` }}
+          data-line={lineNumber}
+        >
+          {lineNumber !== undefined && (
+            <span className="dom-tree-line-number">{lineNumber}</span>
+          )}
+          {hasMatches && (
+            <span
+              className="dom-tree-match-indicator"
+              title={[...matchInfo, associationInfo]
+                .filter(Boolean)
+                .join(" | ")}
+            >
+              ●
+            </span>
+          )}
+          {showAssociationInfo && !hasMatches && (
+            <span
+              className="dom-tree-match-indicator dom-tree-association-indicator"
+              title={associationInfo || ""}
+            >
+              ◆
+            </span>
+          )}
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
               &lt;
@@ -927,7 +1245,7 @@ function renderDomTree(
                   node.tagName
                 )}
               </span>
-              {renderAttributes(node.attributes, node.tagName)}
+              {renderAttributes(node.attributes, node.tagName, matchInfo)}
               <span className="dom-tree-tag">{">"}</span>
             </>
           )}
@@ -991,7 +1309,32 @@ function renderDomTree(
         content={node.selector}
         className="dom-tree-tooltip"
       >
-        <div className={lineClass} style={{ marginLeft: `${depth + 8}px` }}>
+        <div
+          className={lineClass}
+          style={{ marginLeft: `${depth + 8}px` }}
+          data-line={lineNumber}
+        >
+          {lineNumber !== undefined && (
+            <span className="dom-tree-line-number">{lineNumber}</span>
+          )}
+          {hasMatches && (
+            <span
+              className="dom-tree-match-indicator"
+              title={[...matchInfo, associationInfo]
+                .filter(Boolean)
+                .join(" | ")}
+            >
+              ●
+            </span>
+          )}
+          {showAssociationInfo && !hasMatches && (
+            <span
+              className="dom-tree-match-indicator dom-tree-association-indicator"
+              title={associationInfo || ""}
+            >
+              ◆
+            </span>
+          )}
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
               &lt;
@@ -1034,7 +1377,7 @@ function renderDomTree(
                   node.tagName
                 )}
               </span>
-              {renderAttributes(node.attributes, node.tagName)}
+              {renderAttributes(node.attributes, node.tagName, matchInfo)}
               <span className="dom-tree-tag">{"/>"} </span>
             </>
           )}
@@ -1119,7 +1462,7 @@ function renderDomTree(
               node.tagName
             )}
           </span>
-          {renderAttributes(node.attributes, node.tagName)}
+          {renderAttributes(node.attributes, node.tagName, matchInfo)}
           <span className="dom-tree-tag">{">"}</span>
         </>
       )}
@@ -1164,10 +1507,33 @@ function renderDomTree(
       <details
         className="dom-tree-details"
         data-depth={depth}
-        open={shouldOpenByDefault}
+        data-default-open={shouldBeOpen ? "true" : "false"}
+        data-initialized="false"
         style={{ marginLeft: `${depth + 8}px` }}
+        data-line={lineNumber}
       >
         <summary className={`dom-tree-summary ${lineClass}`}>
+          {lineNumber !== undefined && (
+            <span className="dom-tree-line-number">{lineNumber}</span>
+          )}
+          {hasMatches && (
+            <span
+              className="dom-tree-match-indicator"
+              title={[...matchInfo, associationInfo]
+                .filter(Boolean)
+                .join(" | ")}
+            >
+              ●
+            </span>
+          )}
+          {showAssociationInfo && !hasMatches && (
+            <span
+              className="dom-tree-match-indicator dom-tree-association-indicator"
+              title={associationInfo || ""}
+            >
+              ◆
+            </span>
+          )}
           {lineContent}
         </summary>
         <div className="dom-tree-children">
@@ -1177,6 +1543,9 @@ function renderDomTree(
               depth + 1,
               violationTargets,
               ariaRelationships,
+              forceExpandAll,
+              filters,
+              lineCounter,
             ),
           )}
         </div>
@@ -1205,11 +1574,178 @@ export function DOMAnalysisViewer({
   analysis,
   violations = [],
 }: DOMAnalysisViewerProps) {
+  const [domTreeFilters, setDomTreeFilters] = useState<DomTreeFilters>({
+    roles: [],
+    ariaAttrs: [],
+    associationId: false,
+    keyword: "",
+  });
+  const [expandedRoleGroups, setExpandedRoleGroups] = useState<
+    Record<string, boolean>
+  >({});
+  const [expandedFilterSections, setExpandedFilterSections] = useState<
+    Record<"roles" | "aria", boolean>
+  >({
+    roles: false,
+    aria: false,
+  });
+  const domTreeContainerRef = useRef<HTMLDivElement | null>(null);
   const { headings, landmarks, roles, forms, focusable, summary, domTree } =
     analysis;
-  const aaViolations = violations.filter(isAALevelViolation);
   const violationTargets = buildViolationTargetMap(violations);
   const ariaRelationships = buildAriaRelationshipMaps(domTree || null);
+
+  // Collect available roles and aria attributes
+  const availableRoles = collectRolesFromDomTree(domTree || null);
+  const availableAriaAttrs = collectAriaAttributesFromDomTree(domTree || null);
+  const hasActiveDomTreeFilters =
+    domTreeFilters.roles.length > 0 ||
+    domTreeFilters.ariaAttrs.length > 0 ||
+    domTreeFilters.associationId ||
+    domTreeFilters.keyword.trim().length > 0;
+
+  // Sync details elements' open state when filters change
+  useEffect(() => {
+    const elements =
+      domTreeContainerRef.current?.querySelectorAll<HTMLDetailsElement>(
+        ".dom-tree-details",
+      );
+
+    elements?.forEach((element) => {
+      if (element.getAttribute("data-initialized") !== "true") {
+        element.open = element.getAttribute("data-default-open") === "true";
+        element.setAttribute("data-initialized", "true");
+      }
+
+      if (hasActiveDomTreeFilters) {
+        if (!element.hasAttribute("data-user-opened")) {
+          element.open = true;
+        }
+      } else if (!element.hasAttribute("data-user-opened")) {
+        const isMainSection =
+          element.getAttribute("data-default-open") === "true";
+        if (!isMainSection) {
+          element.open = false;
+        }
+      }
+    });
+  }, [hasActiveDomTreeFilters]);
+
+  // Track user interactions with details elements
+  useEffect(() => {
+    const handleToggle = (e: Event) => {
+      const target = e.target as HTMLDetailsElement;
+      if (target.classList.contains("dom-tree-details") && e.isTrusted) {
+        target.setAttribute("data-user-opened", "true");
+      }
+    };
+
+    const elements =
+      domTreeContainerRef.current?.querySelectorAll<HTMLDetailsElement>(
+        ".dom-tree-details",
+      );
+
+    elements?.forEach((element) => {
+      element.addEventListener("toggle", handleToggle);
+    });
+
+    return () => {
+      elements?.forEach((element) => {
+        element.removeEventListener("toggle", handleToggle);
+      });
+    };
+  }, [domTreeFilters]);
+  const domTreeFilterChipSource: Array<{
+    key: keyof DomTreeFilters;
+    label: string;
+    isActive: boolean;
+    value: string;
+  }> = [
+    {
+      key: "roles",
+      label: "Roles",
+      isActive: domTreeFilters.roles.length > 0,
+      value: `${domTreeFilters.roles.length} selected`,
+    },
+    {
+      key: "ariaAttrs",
+      label: "ARIA",
+      isActive: domTreeFilters.ariaAttrs.length > 0,
+      value: `${domTreeFilters.ariaAttrs.length} selected`,
+    },
+    {
+      key: "associationId",
+      label: "ARIA associations",
+      isActive: domTreeFilters.associationId,
+      value: "association",
+    },
+    {
+      key: "keyword",
+      label: "Keyword",
+      isActive: domTreeFilters.keyword.trim().length > 0,
+      value: domTreeFilters.keyword,
+    },
+  ];
+  const activeDomTreeFilterChips = domTreeFilterChipSource.filter(
+    (chip) => chip.isActive,
+  );
+  const filteredDomTree = domTree
+    ? filterDomTreeByFilters(domTree, domTreeFilters, ariaRelationships)
+    : null;
+  const groupedRoles = roles.reduce<
+    Array<{
+      role: string;
+      count: number;
+      elements: string[];
+      labels: string[];
+      ariaLabels: string[];
+      entries: Array<{ element: string; label?: string; ariaLabel?: string }>;
+    }>
+  >((groups, roleItem) => {
+    const normalizedRole = roleItem.role.trim().toLowerCase();
+    const existingGroup = groups.find(
+      (group) => group.role.toLowerCase() === normalizedRole,
+    );
+
+    if (!existingGroup) {
+      groups.push({
+        role: roleItem.role,
+        count: 1,
+        elements: [roleItem.element],
+        labels: roleItem.label ? [roleItem.label] : [],
+        ariaLabels: roleItem.ariaLabel ? [roleItem.ariaLabel] : [],
+        entries: [
+          {
+            element: roleItem.element,
+            label: roleItem.label,
+            ariaLabel: roleItem.ariaLabel,
+          },
+        ],
+      });
+      return groups;
+    }
+
+    existingGroup.count += 1;
+    if (!existingGroup.elements.includes(roleItem.element)) {
+      existingGroup.elements.push(roleItem.element);
+    }
+    if (roleItem.label && !existingGroup.labels.includes(roleItem.label)) {
+      existingGroup.labels.push(roleItem.label);
+    }
+    if (
+      roleItem.ariaLabel &&
+      !existingGroup.ariaLabels.includes(roleItem.ariaLabel)
+    ) {
+      existingGroup.ariaLabels.push(roleItem.ariaLabel);
+    }
+    existingGroup.entries.push({
+      element: roleItem.element,
+      label: roleItem.label,
+      ariaLabel: roleItem.ariaLabel,
+    });
+
+    return groups;
+  }, []);
 
   return (
     <div className="dom-analysis-section">
@@ -1217,8 +1753,6 @@ export function DOMAnalysisViewer({
         <h2>🔍 DOM Structure & Regions</h2>
         <p className="dom-analysis-subtitle">
           Page structure including headings, landmark regions, and form controls
-          {aaViolations.length > 0 &&
-            " (showing JAWS details for AA level issues)"}
         </p>
       </div>
 
@@ -1227,13 +1761,267 @@ export function DOMAnalysisViewer({
           <h3 className="dom-section-title">
             <span className="section-icon">🧭</span> Interactive DOM Tree
           </h3>
+          <div className="dom-tree-filters">
+            {/* Roles Filter Section */}
+            <div className="dom-tree-filter-section">
+              <button
+                className="dom-tree-filter-section-toggle"
+                onClick={() =>
+                  setExpandedFilterSections((prev) => ({
+                    ...prev,
+                    roles: !prev.roles,
+                  }))
+                }
+              >
+                <span className="toggle-icon">
+                  {expandedFilterSections.roles ? "▼" : "▶"}
+                </span>
+                <span className="dom-tree-filter-label">Roles</span>
+                {domTreeFilters.roles.length > 0 && (
+                  <span className="filter-count">
+                    ({domTreeFilters.roles.length})
+                  </span>
+                )}
+              </button>
+
+              {expandedFilterSections.roles && (
+                <div className="dom-tree-filter-group">
+                  <label className="dom-tree-filter-all">
+                    <input
+                      type="checkbox"
+                      checked={
+                        domTreeFilters.roles.length === availableRoles.length &&
+                        availableRoles.length > 0
+                      }
+                      onChange={(event) =>
+                        setDomTreeFilters((prev) => ({
+                          ...prev,
+                          roles: event.target.checked ? availableRoles : [],
+                        }))
+                      }
+                    />
+                    <span>All roles</span>
+                  </label>
+
+                  {availableRoles.map((role) => {
+                    const canProduce = canRoleProduceMatches(
+                      role,
+                      domTreeFilters,
+                      domTree,
+                      ariaRelationships,
+                    );
+                    return (
+                      <label
+                        key={role}
+                        className="dom-tree-filter-item"
+                        style={{ opacity: canProduce ? 1 : 0.5 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={domTreeFilters.roles.includes(role)}
+                          disabled={
+                            !canProduce && !domTreeFilters.roles.includes(role)
+                          }
+                          onChange={(event) =>
+                            setDomTreeFilters((prev) => ({
+                              ...prev,
+                              roles: event.target.checked
+                                ? [...prev.roles, role]
+                                : prev.roles.filter((r) => r !== role),
+                            }))
+                          }
+                        />
+                        <span>{role}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* ARIA Attributes Filter Section */}
+            <div className="dom-tree-filter-section">
+              <button
+                className="dom-tree-filter-section-toggle"
+                onClick={() =>
+                  setExpandedFilterSections((prev) => ({
+                    ...prev,
+                    aria: !prev.aria,
+                  }))
+                }
+              >
+                <span className="toggle-icon">
+                  {expandedFilterSections.aria ? "▼" : "▶"}
+                </span>
+                <span className="dom-tree-filter-label">ARIA</span>
+                {domTreeFilters.ariaAttrs.length > 0 && (
+                  <span className="filter-count">
+                    ({domTreeFilters.ariaAttrs.length})
+                  </span>
+                )}
+              </button>
+
+              {expandedFilterSections.aria && (
+                <div className="dom-tree-filter-group">
+                  <label className="dom-tree-filter-all">
+                    <input
+                      type="checkbox"
+                      checked={
+                        domTreeFilters.ariaAttrs.length ===
+                          availableAriaAttrs.length &&
+                        availableAriaAttrs.length > 0
+                      }
+                      onChange={(event) =>
+                        setDomTreeFilters((prev) => ({
+                          ...prev,
+                          ariaAttrs: event.target.checked
+                            ? availableAriaAttrs
+                            : [],
+                        }))
+                      }
+                    />
+                    <span>All ARIA attributes</span>
+                  </label>
+
+                  {availableAriaAttrs.map((attr) => {
+                    const canProduce = canAriaAttrProduceMatches(
+                      attr,
+                      domTreeFilters,
+                      domTree,
+                      ariaRelationships,
+                    );
+                    return (
+                      <label
+                        key={attr}
+                        className="dom-tree-filter-item"
+                        style={{ opacity: canProduce ? 1 : 0.5 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={domTreeFilters.ariaAttrs.includes(attr)}
+                          disabled={
+                            !canProduce &&
+                            !domTreeFilters.ariaAttrs.includes(attr)
+                          }
+                          onChange={(event) =>
+                            setDomTreeFilters((prev) => ({
+                              ...prev,
+                              ariaAttrs: event.target.checked
+                                ? [...prev.ariaAttrs, attr]
+                                : prev.ariaAttrs.filter((a) => a !== attr),
+                            }))
+                          }
+                        />
+                        <span>{attr}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <label className="dom-tree-filter dom-tree-filter-checkbox">
+              <input
+                type="checkbox"
+                checked={domTreeFilters.associationId}
+                onChange={(event) =>
+                  setDomTreeFilters((prev) => ({
+                    ...prev,
+                    associationId: event.target.checked,
+                  }))
+                }
+              />
+              <span className="dom-tree-filter-label">ARIA associations</span>
+            </label>
+
+            <label className="dom-tree-filter">
+              <span className="dom-tree-filter-label">Keyword search</span>
+              <input
+                type="text"
+                value={domTreeFilters.keyword}
+                placeholder="tag, selector, text, attribute"
+                onChange={(event) =>
+                  setDomTreeFilters((prev) => ({
+                    ...prev,
+                    keyword: event.target.value,
+                  }))
+                }
+              />
+            </label>
+
+            <button
+              type="button"
+              className="dom-tree-filter-reset"
+              disabled={!hasActiveDomTreeFilters}
+              onClick={() =>
+                setDomTreeFilters({
+                  roles: [],
+                  ariaAttrs: [],
+                  associationId: false,
+                  keyword: "",
+                })
+              }
+            >
+              Clear filters
+            </button>
+          </div>
+          {activeDomTreeFilterChips.length > 0 && (
+            <div className="dom-tree-filter-chips" aria-label="Active filters">
+              {activeDomTreeFilterChips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  className="dom-tree-filter-chip"
+                  onClick={() =>
+                    setDomTreeFilters((prev) => ({
+                      ...prev,
+                      [chip.key]:
+                        chip.key === "roles" || chip.key === "ariaAttrs"
+                          ? []
+                          : chip.key === "keyword"
+                            ? ""
+                            : false,
+                    }))
+                  }
+                >
+                  <span>{chip.label}</span>
+                  {chip.key !== "roles" && chip.key !== "ariaAttrs" && (
+                    <>
+                      <span>: </span>
+                      <strong>{chip.value}</strong>
+                    </>
+                  )}
+                  <span
+                    className="dom-tree-filter-chip-remove"
+                    aria-hidden="true"
+                  >
+                    ×
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
           <p className="section-hint">
             Expand any line to explore children. ARIA, WCAG, AXE, and HTML5
             semantics are highlighted. ARIA relationships
             (labelledby/describedby) shown with →LABEL/→DESC and ←REF badges.
           </p>
-          <div className="dom-tree">
-            {renderDomTree(domTree, 0, violationTargets, ariaRelationships)}
+          <div className="dom-tree" ref={domTreeContainerRef}>
+            {filteredDomTree ? (
+              renderDomTree(
+                filteredDomTree,
+                0,
+                violationTargets,
+                ariaRelationships,
+                hasActiveDomTreeFilters,
+                domTreeFilters,
+                { current: 0 },
+              )
+            ) : (
+              <p className="dom-tree-empty">
+                No elements match the current filters.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1313,11 +2101,6 @@ export function DOMAnalysisViewer({
                 {heading.id && (
                   <span className="heading-id">#{heading.id}</span>
                 )}
-                {aaViolations.length > 0 && (
-                  <span className="sr-announcement">
-                    JAWS reads: {heading.announcement}
-                  </span>
-                )}
               </div>
             ))}
           </div>
@@ -1330,9 +2113,6 @@ export function DOMAnalysisViewer({
           <h3 className="dom-section-title">
             <span className="section-icon">🗺️</span> Landmark Regions
           </h3>
-          <p className="section-hint">
-            Use D key in JAWS to navigate between landmarks
-          </p>
           <div className="landmarks-grid">
             {landmarks.map((landmark, idx) => (
               <div key={idx} className="landmark-card">
@@ -1348,11 +2128,6 @@ export function DOMAnalysisViewer({
                     <strong>Label:</strong> &quot;{landmark.label}&quot;
                   </div>
                 )}
-                {aaViolations.length > 0 && (
-                  <div className="sr-announcement">
-                    JAWS reads: {landmark.announcement}
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -1365,27 +2140,100 @@ export function DOMAnalysisViewer({
           <h3 className="dom-section-title">
             <span className="section-icon">📌</span> Custom Roles
           </h3>
-          <p className="section-hint">Elements with explicit ARIA roles</p>
+          <p className="section-hint">
+            Grouped by role to keep similar patterns together
+          </p>
           <div className="roles-grid">
-            {roles.map((role, idx) => (
-              <div key={idx} className="role-card">
-                <div className="role-description">
-                  <span className="role-badge">{role.role}</span>
-                  <span className="element-badge">
-                    {" "}
-                    on &lt;{role.element}&gt;
+            {groupedRoles.map((group, idx) => (
+              <div
+                key={`${group.role}-${idx}`}
+                className="role-card role-card-compact"
+              >
+                <div className="role-description role-description-compact">
+                  <span className="role-badge">{group.role}</span>
+                  <span className="role-count">
+                    {group.count} item{group.count !== 1 ? "s" : ""}
                   </span>
                 </div>
-                {generateRoleHTML(
-                  role.element,
-                  role.role,
-                  role.ariaLabel,
-                  role.label,
+
+                <div className="role-elements-inline">
+                  {group.elements.map((elementName) => (
+                    <span key={elementName} className="element-badge">
+                      &lt;{elementName}&gt;
+                    </span>
+                  ))}
+                </div>
+
+                {group.ariaLabels.length > 0 && (
+                  <p className="role-meta-line">
+                    <strong>aria-label:</strong> &quot;{group.ariaLabels[0]}
+                    &quot;
+                    {group.ariaLabels.length > 1
+                      ? ` +${group.ariaLabels.length - 1} more`
+                      : ""}
+                  </p>
                 )}
-                {aaViolations.length > 0 && (
-                  <div className="sr-announcement">
-                    JAWS reads: {role.announcement}
-                  </div>
+
+                {group.labels.length > 0 && (
+                  <p className="role-meta-line">
+                    <strong>Visible label:</strong> &quot;{group.labels[0]}
+                    &quot;
+                    {group.labels.length > 1
+                      ? ` +${group.labels.length - 1} more`
+                      : ""}
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  className="role-toggle"
+                  onClick={() =>
+                    setExpandedRoleGroups((prev) => ({
+                      ...prev,
+                      [`${group.role}-${idx}`]: !prev[`${group.role}-${idx}`],
+                    }))
+                  }
+                  aria-expanded={Boolean(
+                    expandedRoleGroups[`${group.role}-${idx}`],
+                  )}
+                >
+                  {expandedRoleGroups[`${group.role}-${idx}`]
+                    ? "Hide affected elements"
+                    : `Show all affected elements (${group.entries.length})`}
+                </button>
+
+                {expandedRoleGroups[`${group.role}-${idx}`] && (
+                  <ul className="role-affected-list">
+                    {group.entries.map((entry, entryIdx) => (
+                      <li key={`${group.role}-${idx}-${entryIdx}`}>
+                        <span className="role-entry-html">
+                          <span className="tag-bracket">&lt;</span>
+                          <span className="tag-name">{entry.element}</span>
+                          <span className="html-attribute role-attribute">
+                            {" "}
+                            <span className="attr-name highlight-role">
+                              role
+                            </span>
+                            <span className="attr-equals">=</span>
+                            <span className="attr-value">
+                              &quot;{group.role}&quot;
+                            </span>
+                          </span>
+                          <span className="tag-bracket">&gt;</span>
+                        </span>
+                        {entry.ariaLabel && (
+                          <span className="role-entry-meta">
+                            aria-label=&quot;{entry.ariaLabel}&quot;
+                          </span>
+                        )}
+                        {entry.label && !entry.ariaLabel && (
+                          <span className="role-entry-meta">
+                            label=&quot;{entry.label}&quot;
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
             ))}
@@ -1434,11 +2282,6 @@ export function DOMAnalysisViewer({
                     form.label,
                     form.required,
                   )}
-                  {aaViolations.length > 0 && (
-                    <div className="sr-announcement">
-                      JAWS reads: {form.announcement}
-                    </div>
-                  )}
                 </div>
               ))}
           </div>
@@ -1470,9 +2313,6 @@ export function DOMAnalysisViewer({
                     item.tabindex,
                     item.label,
                   )}
-                  <div className="sr-announcement compact">
-                    🔊 JAWS: &quot;{item.announcement}&quot;
-                  </div>
                 </div>
               </div>
             ))}
