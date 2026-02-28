@@ -1129,6 +1129,8 @@ function renderDomTree(
     node.selector,
   );
   const hasRelationship = relationships && relationships.length > 0;
+  const hasDescribedByRelationship =
+    relationships?.some((rel) => rel.type === "describedby") ?? false;
 
   // Check if this element is referenced by others
   const elementId = node.attributes.id;
@@ -1168,8 +1170,8 @@ function renderDomTree(
     .filter(Boolean)
     .join(" ");
 
-  // For elements without element children (but not void), show complete tag with closing on same line
-  if (!hasElementChildren && !isVoid) {
+  // For elements without element children (or describedby relationships), show complete tag with closing on same line
+  if ((!hasElementChildren || hasDescribedByRelationship) && !isVoid) {
     return (
       <StyledTooltip
         key={node.selector}
