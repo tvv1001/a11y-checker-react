@@ -344,6 +344,7 @@ function renderAttributes(
       }[]
     >;
   },
+  associationFilterActive = false,
 ) {
   const entries = Object.entries(attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
@@ -410,7 +411,9 @@ function renderAttributes(
         const highlightedClass = [
           attributeClass,
           isMatched ? "dom-attr-matched" : "",
-          hasAssociation ? "dom-attr-associated" : "",
+          associationFilterActive && hasAssociation
+            ? "dom-attr-associated"
+            : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -713,6 +716,7 @@ function renderDomTree(
                 matchInfo,
                 node.selector,
                 ariaRelationships,
+                Boolean(filters?.associationId),
               )}
               <span className="dom-tree-tag">{">"}</span>
             </>
@@ -890,7 +894,14 @@ function renderDomTree(
                   node.tagName
                 )}
               </span>
-              {renderAttributes(node.attributes, node.tagName, matchInfo)}
+              {renderAttributes(
+                node.attributes,
+                node.tagName,
+                matchInfo,
+                node.selector,
+                ariaRelationships,
+                Boolean(filters?.associationId),
+              )}
               <span className="dom-tree-tag">{"/>"} </span>
             </>
           )}
@@ -1027,6 +1038,7 @@ function renderDomTree(
             matchInfo,
             node.selector,
             ariaRelationships,
+            Boolean(filters?.associationId),
           )}
           <span className="dom-tree-tag">{">"}</span>
         </>
@@ -1173,11 +1185,34 @@ function FilteredElementItem({
     (elementId && ariaRelationships?.idToReferences.get(elementId)) || [];
 
   // Check if an attribute matches the active filter
-  const isAttributeFiltered = (attrName: string): boolean => {
+  const isAssociationAttribute = (attrName: string, attrValue: string) => {
+    if (!filters.associationId) return false;
+
+    const isReferencedId = attrName === "id" && references.length > 0;
+    const isAriaAssociationAttribute =
+      (attrName === "aria-labelledby" ||
+        attrName === "aria-describedby" ||
+        attrName === "aria-controls" ||
+        attrName === "aria-haspopup") &&
+      relationships.length > 0;
+    const isMenuAssociationAttribute =
+      (attrName === "role" &&
+        (attrValue === "menu" || attrValue === "menuitem")) ||
+      (attrName === "aria-haspopup" && attrValue === "menu");
+
+    return (
+      isReferencedId || isAriaAssociationAttribute || isMenuAssociationAttribute
+    );
+  };
+
+  const isAttributeFiltered = (
+    attrName: string,
+    attrValue: string,
+  ): boolean => {
     if (attrName === "role" && filters.roles.length > 0) return true;
     if (attrName.startsWith("aria-") && filters.ariaAttrs.includes(attrName))
       return true;
-    if (attrName === "id" && filters.associationId) return true;
+    if (isAssociationAttribute(attrName, attrValue)) return true;
     return false;
   };
 
@@ -1187,7 +1222,7 @@ function FilteredElementItem({
     if (attrs.length === 0) return null;
 
     return attrs.map(([name, value]) => {
-      const isFiltered = isAttributeFiltered(name);
+      const isFiltered = isAttributeFiltered(name, value);
       return (
         <span key={name}>
           {" "}
