@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import { useState, useRef, useEffect } from "react";
 import type { DOMAnalysis, DOMTreeNode } from "@/lib/dom-analyzer";
 import type { Violation } from "@/lib/types";
@@ -431,7 +432,10 @@ function renderAttributes(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
 ) {
@@ -456,6 +460,16 @@ function renderAttributes(
         const roleTooltip = isRoleAttribute
           ? getARIARoleTooltip(value, elementTag)
           : undefined;
+
+        // Validation: aria-label and aria-labelledby MUST NOT be used on role="presentation" or role="none"
+        let invalidAttrMessage: string | undefined = undefined;
+        const roleOnElement = (attributes["role"] || "").toLowerCase();
+        if (
+          (name === "aria-label" || name === "aria-labelledby") &&
+          (roleOnElement === "presentation" || roleOnElement === "none")
+        ) {
+          invalidAttrMessage = `${name} is not allowed on elements with role='${roleOnElement}'. Use a visible label on a non-presentational element instead.`;
+        }
 
         // Check if this attribute matches the current filter
         const isRoleMatch = isRoleAttribute && matchInfo?.includes("role");
@@ -492,16 +506,26 @@ function renderAttributes(
           </span>
         );
 
-        return tooltipContent || roleTooltip ? (
+        const finalTooltip = invalidAttrMessage
+          ? invalidAttrMessage
+          : roleTooltip
+            ? roleTooltip
+            : tooltipContent;
+
+        const invalidClass = invalidAttrMessage ? " dom-attr-invalid" : "";
+
+        return finalTooltip ? (
           <StyledTooltip
             key={name}
-            content={`[ARIA] ${roleTooltip ?? tooltipContent}`}
+            content={`[ARIA] ${finalTooltip}`}
             className="dom-attr-tooltip"
           >
-            {badge}
+            {React.cloneElement(badge as any, {
+              className: highlightedClass + invalidClass,
+            })}
           </StyledTooltip>
         ) : (
-          <span key={name} className={highlightedClass}>
+          <span key={name} className={highlightedClass + invalidClass}>
             <span className="dom-attr-name">{name}</span>
             <span className="dom-attr-equals">=</span>
             <span className="dom-attr-value">&quot;{value}&quot;</span>
@@ -549,9 +573,17 @@ function buildViolationTargetMap(violations: Violation[]) {
 }
 
 interface AriaRelationship {
-  type: "labelledby" | "describedby";
+  type: "labelledby" | "describedby" | "controls" | "haspopup";
   targetIds: string[];
   sourceSelector: string;
+  popupType?: string;
+  validation?: {
+    expectedRole?: string;
+    roleMatches?: boolean;
+    expectedChildRole?: string;
+    itemsHaveExpectedChildRole?: boolean;
+    details?: string;
+  };
 }
 
 interface DomTreeFilters {
@@ -566,25 +598,38 @@ function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
   selectorToRelationships: Map<string, AriaRelationship[]>;
   idToReferences: Map<
     string,
-    { selector: string; type: "labelledby" | "describedby" }[]
+    {
+      selector: string;
+      type: "labelledby" | "describedby" | "controls" | "haspopup";
+    }[]
   >;
 } {
   const idToSelector = new Map<string, string>();
+  const idToNode = new Map<string, DOMTreeNode>();
   const selectorToRelationships = new Map<string, AriaRelationship[]>();
   const idToReferences = new Map<
     string,
-    { selector: string; type: "labelledby" | "describedby" }[]
+    {
+      selector: string;
+      type: "labelledby" | "describedby" | "controls" | "haspopup";
+    }[]
   >();
 
-  function traverse(current: DOMTreeNode) {
-    // Track elements with IDs
+  // First pass: collect id -> selector and id -> node maps
+  function collectIds(current: DOMTreeNode) {
     if (current.attributes.id) {
       idToSelector.set(current.attributes.id, current.selector);
+      idToNode.set(current.attributes.id, current);
     }
+    current.children?.forEach(collectIds);
+  }
 
-    // Track elements with aria-labelledby or aria-describedby
+  // Second pass: build relationships and basic validations
+  function collectRelationships(current: DOMTreeNode) {
     const labelledBy = current.attributes["aria-labelledby"];
     const describedBy = current.attributes["aria-describedby"];
+    const controls = current.attributes["aria-controls"];
+    const haspopup = current.attributes["aria-haspopup"];
 
     if (labelledBy) {
       const targetIds = labelledBy.split(/\s+/).filter(Boolean);
@@ -593,14 +638,11 @@ function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
         targetIds,
         sourceSelector: current.selector,
       };
-
       const existing = selectorToRelationships.get(current.selector) || [];
       selectorToRelationships.set(current.selector, [
         ...existing,
         relationship,
       ]);
-
-      // Track reverse relationship
       targetIds.forEach((id) => {
         const refs = idToReferences.get(id) || [];
         refs.push({ selector: current.selector, type: "labelledby" });
@@ -615,6 +657,56 @@ function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
         targetIds,
         sourceSelector: current.selector,
       };
+      const existing = selectorToRelationships.get(current.selector) || [];
+      selectorToRelationships.set(current.selector, [
+        ...existing,
+        relationship,
+      ]);
+      targetIds.forEach((id) => {
+        const refs = idToReferences.get(id) || [];
+        refs.push({ selector: current.selector, type: "describedby" });
+        idToReferences.set(id, refs);
+      });
+    }
+
+    if (controls) {
+      const targetIds = controls.split(/\s+/).filter(Boolean);
+      const relationship: AriaRelationship = {
+        type: "controls",
+        targetIds,
+        sourceSelector: current.selector,
+      };
+
+      // Basic validation: ensure targets exist; for common patterns, check expected roles
+      const validation = { roleMatches: true, details: "" } as {
+        roleMatches?: boolean;
+        expectedRole?: string;
+        details?: string;
+      };
+      const sourceRole = (current.attributes.role || "").toLowerCase();
+      if (sourceRole === "tab") {
+        validation.expectedRole = "tabpanel";
+      }
+
+      for (const id of targetIds) {
+        const targetNode = idToNode.get(id);
+        if (!targetNode) {
+          validation.roleMatches = false;
+          validation.details += `Target id=${id} not found. `;
+          continue;
+        }
+        if (validation.expectedRole) {
+          const roleAttr = (targetNode.attributes.role || "").toLowerCase();
+          if (roleAttr !== validation.expectedRole) {
+            validation.roleMatches = false;
+            validation.details += `Target ${id} role='${roleAttr || "(none)"}' expected '${validation.expectedRole}'. `;
+          }
+        }
+      }
+
+      if (validation.details) {
+        relationship.validation = validation as any;
+      }
 
       const existing = selectorToRelationships.get(current.selector) || [];
       selectorToRelationships.set(current.selector, [
@@ -625,19 +717,116 @@ function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
       // Track reverse relationship
       targetIds.forEach((id) => {
         const refs = idToReferences.get(id) || [];
-        refs.push({ selector: current.selector, type: "describedby" });
+        refs.push({ selector: current.selector, type: "controls" });
         idToReferences.set(id, refs);
       });
     }
 
-    // Recurse through children
-    if (current.children) {
-      current.children.forEach((child) => traverse(child));
+    if (haspopup) {
+      const popupType = String(haspopup).trim();
+      const relationship: AriaRelationship = {
+        type: "haspopup",
+        targetIds: [],
+        popupType,
+        sourceSelector: current.selector,
+      };
+
+      // Map popupType to expected roles and expected child roles
+      const expectedRoleFor = (val: string | undefined): string | undefined => {
+        if (!val) return undefined;
+        const v = val.toLowerCase();
+        if (v === "false") return undefined;
+        if (v === "true" || v === "menu") return "menu";
+        if (v === "listbox") return "listbox";
+        if (v === "tree") return "tree";
+        if (v === "grid") return "grid";
+        if (v === "dialog") return "dialog";
+        return undefined;
+      };
+
+      const expectedChildRoleFor = (
+        expectedRole?: string,
+      ): string | undefined => {
+        if (!expectedRole) return undefined;
+        if (expectedRole === "menu") return "menuitem";
+        if (expectedRole === "listbox") return "option";
+        if (expectedRole === "tree") return "treeitem";
+        if (expectedRole === "grid") return "gridcell";
+        return undefined;
+      };
+
+      if (controls) {
+        const targetIds = controls.split(/\s+/).filter(Boolean);
+        relationship.targetIds = targetIds;
+
+        const expectedRole = expectedRoleFor(popupType);
+        const expectedChildRole = expectedChildRoleFor(expectedRole);
+
+        const validation = {
+          expectedRole,
+          roleMatches: true,
+          expectedChildRole,
+          itemsHaveExpectedChildRole: true,
+          details: "",
+        } as {
+          expectedRole?: string;
+          roleMatches?: boolean;
+          expectedChildRole?: string;
+          itemsHaveExpectedChildRole?: boolean;
+          details?: string;
+        };
+
+        for (const id of targetIds) {
+          const targetNode = idToNode.get(id);
+          if (!targetNode) {
+            validation.roleMatches = false;
+            validation.details += `Target id=${id} not found. `;
+            continue;
+          }
+          if (expectedRole) {
+            const roleAttr = (targetNode.attributes.role || "").toLowerCase();
+            if (roleAttr !== expectedRole) {
+              validation.roleMatches = false;
+              validation.details += `Target ${id} role='${roleAttr || "(none)"}' expected '${expectedRole}'. `;
+            }
+          }
+
+          if (expectedChildRole) {
+            const descendants = targetNode.children || [];
+            const nonMatchingChildren = descendants.filter((d) => {
+              const r = (d.attributes.role || "").toLowerCase();
+              const likelyItemTag = [
+                "li",
+                "a",
+                "button",
+                "div",
+                "span",
+              ].includes(d.tagName);
+              return likelyItemTag && r !== expectedChildRole;
+            });
+            if (nonMatchingChildren.length > 0) {
+              validation.itemsHaveExpectedChildRole = false;
+              validation.details += `Some children of ${id} lack role='${expectedChildRole}'. `;
+            }
+          }
+        }
+
+        relationship.validation = validation;
+      }
+
+      const existing = selectorToRelationships.get(current.selector) || [];
+      selectorToRelationships.set(current.selector, [
+        ...existing,
+        relationship,
+      ]);
     }
+
+    current.children?.forEach(collectRelationships);
   }
 
   if (node) {
-    traverse(node);
+    collectIds(node);
+    collectRelationships(node);
   }
 
   return { idToSelector, selectorToRelationships, idToReferences };
@@ -836,7 +1025,10 @@ function nodeMatchesDomTreeFilters(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
 ): boolean {
@@ -901,7 +1093,10 @@ function getNodeMatchInfo(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
 ): string[] {
@@ -968,7 +1163,10 @@ function filterDomTreeByFilters(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
 ): DOMTreeNode | null {
@@ -1018,7 +1216,10 @@ function canRoleProduceMatches(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
 ): boolean {
@@ -1052,7 +1253,10 @@ function canAriaAttrProduceMatches(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
 ): boolean {
@@ -1085,7 +1289,7 @@ function collectFilteredNodes(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      { selector: string; type: "labelledby" | "describedby" | "controls" }[]
     >;
   },
   collected: DOMTreeNode[] = [],
@@ -1111,7 +1315,7 @@ function renderDomTree(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      { selector: string; type: "labelledby" | "describedby" | "controls" }[]
     >;
   },
   forceExpandAll = false,
@@ -1187,6 +1391,10 @@ function renderDomTree(
     relationships?.some((rel) => rel.type === "describedby") ?? false;
   const hasLabelledByRelationship =
     relationships?.some((rel) => rel.type === "labelledby") ?? false;
+  const hasControlsRelationship =
+    relationships?.some((rel) => rel.type === "controls") ?? false;
+  const hasHasPopupRelationship =
+    relationships?.some((rel) => rel.type === "haspopup") ?? false;
 
   // Check if this element is referenced by others
   const elementId = node.attributes.id;
@@ -1214,7 +1422,9 @@ function renderDomTree(
   if (
     (!hasNonVoidElementChildren ||
       hasDescribedByRelationship ||
-      hasLabelledByRelationship) &&
+      hasLabelledByRelationship ||
+      hasControlsRelationship ||
+      hasHasPopupRelationship) &&
     !isVoid
   ) {
     return (
@@ -1309,24 +1519,70 @@ function renderDomTree(
               <span className="dom-badge wcag">WCAG</span>
             )}
             {relationships &&
-              relationships.map((rel, idx) => (
-                <StyledTooltip
-                  key={`rel-${idx}`}
-                  content={`[ARIA] This element is ${rel.type === "labelledby" ? "labelled by" : "described by"} element(s) with ID: ${rel.targetIds.join(", ")}`}
-                  className="dom-badge-tooltip"
-                >
-                  <span className="dom-badge aria-relationship">
-                    {rel.type === "labelledby" ? "\u2192LABEL" : "\u2192DESC"}
-                  </span>
-                </StyledTooltip>
-              ))}
+              relationships.map((rel, idx) => {
+                const label =
+                  rel.type === "labelledby"
+                    ? "labelled by"
+                    : rel.type === "describedby"
+                      ? "described by"
+                      : rel.type === "controls"
+                        ? "controls"
+                        : "haspopup";
+                const badge =
+                  rel.type === "labelledby"
+                    ? "\u2192LABEL"
+                    : rel.type === "describedby"
+                      ? "\u2192DESC"
+                      : rel.type === "controls"
+                        ? "\u2192CTRL"
+                        : "\u2192HPUP";
+                const tooltipContent =
+                  rel.type === "haspopup"
+                    ? `[ARIA] This element has aria-haspopup: ${rel.popupType || rel.targetIds.join(", ")}` +
+                      (rel.validation?.details
+                        ? ` — ${rel.validation.details}`
+                        : "")
+                    : `[ARIA] This element is ${label} element(s) with ID: ${rel.targetIds.join(", ")}` +
+                      (rel.validation?.details
+                        ? ` — ${rel.validation.details}`
+                        : "");
+                return (
+                  <StyledTooltip
+                    key={`rel-${idx}`}
+                    content={tooltipContent}
+                    className="dom-badge-tooltip"
+                  >
+                    <span className="dom-badge aria-relationship">{badge}</span>
+                  </StyledTooltip>
+                );
+              })}
             {referencedBy && referencedBy.length > 0 && (
               <StyledTooltip
-                content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
+                content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy
+                  .map((r) =>
+                    r.type === "labelledby"
+                      ? "aria-labelledby"
+                      : r.type === "describedby"
+                        ? "aria-describedby"
+                        : r.type === "controls"
+                          ? "aria-controls"
+                          : "aria-haspopup",
+                  )
+                  .join(", ")}`}
                 className="dom-badge-tooltip"
               >
                 <span className="dom-badge aria-referenced">
-                  {referencedBy.map((r) => `aria-${r.type}`).join(", ")}
+                  {referencedBy
+                    .map((r) =>
+                      r.type === "labelledby"
+                        ? "aria-labelledby"
+                        : r.type === "describedby"
+                          ? "aria-describedby"
+                          : r.type === "controls"
+                            ? "aria-controls"
+                            : "aria-haspopup",
+                    )
+                    .join(", ")}
                 </span>
               </StyledTooltip>
             )}
@@ -1406,24 +1662,70 @@ function renderDomTree(
               <span className="dom-badge wcag">WCAG</span>
             )}
             {relationships &&
-              relationships.map((rel, idx) => (
-                <StyledTooltip
-                  key={`rel-${idx}`}
-                  content={`[ARIA] This element is ${rel.type === "labelledby" ? "labelled by" : "described by"} element(s) with ID: ${rel.targetIds.join(", ")}`}
-                  className="dom-badge-tooltip"
-                >
-                  <span className="dom-badge aria-relationship">
-                    {rel.type === "labelledby" ? "→LABEL" : "→DESC"}
-                  </span>
-                </StyledTooltip>
-              ))}
+              relationships.map((rel, idx) => {
+                const label =
+                  rel.type === "labelledby"
+                    ? "labelled by"
+                    : rel.type === "describedby"
+                      ? "described by"
+                      : rel.type === "controls"
+                        ? "controls"
+                        : "haspopup";
+                const badge =
+                  rel.type === "labelledby"
+                    ? "→LABEL"
+                    : rel.type === "describedby"
+                      ? "→DESC"
+                      : rel.type === "controls"
+                        ? "→CTRL"
+                        : "→HPUP";
+                const tooltipContent =
+                  rel.type === "haspopup"
+                    ? `[ARIA] This element has aria-haspopup: ${rel.popupType || rel.targetIds.join(", ")}` +
+                      (rel.validation?.details
+                        ? ` — ${rel.validation.details}`
+                        : "")
+                    : `[ARIA] This element is ${label} element(s) with ID: ${rel.targetIds.join(", ")}` +
+                      (rel.validation?.details
+                        ? ` — ${rel.validation.details}`
+                        : "");
+                return (
+                  <StyledTooltip
+                    key={`rel-${idx}`}
+                    content={tooltipContent}
+                    className="dom-badge-tooltip"
+                  >
+                    <span className="dom-badge aria-relationship">{badge}</span>
+                  </StyledTooltip>
+                );
+              })}
             {referencedBy && referencedBy.length > 0 && (
               <StyledTooltip
-                content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
+                content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy
+                  .map((r) =>
+                    r.type === "labelledby"
+                      ? "aria-labelledby"
+                      : r.type === "describedby"
+                        ? "aria-describedby"
+                        : r.type === "controls"
+                          ? "aria-controls"
+                          : "aria-haspopup",
+                  )
+                  .join(", ")}`}
                 className="dom-badge-tooltip"
               >
                 <span className="dom-badge aria-referenced">
-                  {referencedBy.map((r) => `aria-${r.type}`).join(", ")}
+                  {referencedBy
+                    .map((r) =>
+                      r.type === "labelledby"
+                        ? "aria-labelledby"
+                        : r.type === "describedby"
+                          ? "aria-describedby"
+                          : r.type === "controls"
+                            ? "aria-controls"
+                            : "aria-haspopup",
+                    )
+                    .join(", ")}
                 </span>
               </StyledTooltip>
             )}
@@ -1496,17 +1798,43 @@ function renderDomTree(
         {violationMeta?.hasAxe && <span className="dom-badge axe">AXE</span>}
         {violationMeta?.hasWcag && <span className="dom-badge wcag">WCAG</span>}
         {relationships &&
-          relationships.map((rel, idx) => (
-            <StyledTooltip
-              key={`rel-${idx}`}
-              content={`[ARIA] This element is ${rel.type === "labelledby" ? "labelled by" : "described by"} element(s) with ID: ${rel.targetIds.join(", ")}`}
-              className="dom-badge-tooltip"
-            >
-              <span className="dom-badge aria-relationship">
-                {rel.type === "labelledby" ? "→LABEL" : "→DESC"}
-              </span>
-            </StyledTooltip>
-          ))}
+          relationships.map((rel, idx) => {
+            const label =
+              rel.type === "labelledby"
+                ? "labelled by"
+                : rel.type === "describedby"
+                  ? "described by"
+                  : rel.type === "controls"
+                    ? "controls"
+                    : "haspopup";
+            const badge =
+              rel.type === "labelledby"
+                ? "→LABEL"
+                : rel.type === "describedby"
+                  ? "→DESC"
+                  : rel.type === "controls"
+                    ? "→CTRL"
+                    : "→HPUP";
+            const tooltipContent =
+              rel.type === "haspopup"
+                ? `[ARIA] This element has aria-haspopup: ${rel.popupType || rel.targetIds.join(", ")}` +
+                  (rel.validation?.details
+                    ? ` — ${rel.validation.details}`
+                    : "")
+                : `[ARIA] This element is ${label} element(s) with ID: ${rel.targetIds.join(", ")}` +
+                  (rel.validation?.details
+                    ? ` — ${rel.validation.details}`
+                    : "");
+            return (
+              <StyledTooltip
+                key={`rel-${idx}`}
+                content={tooltipContent}
+                className="dom-badge-tooltip"
+              >
+                <span className="dom-badge aria-relationship">{badge}</span>
+              </StyledTooltip>
+            );
+          })}
         {referencedBy && referencedBy.length > 0 && (
           <StyledTooltip
             content={`[ARIA] This element (id="${elementId}") is referenced by ${referencedBy.length} element(s) via ${referencedBy.map((r) => `aria-${r.type}`).join(", ")}`}
@@ -1589,7 +1917,7 @@ function FilteredElementItem({
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" }[]
+      { selector: string; type: "labelledby" | "describedby" | "controls" }[]
     >;
   };
   filters: DomTreeFilters;
@@ -1701,28 +2029,40 @@ function FilteredElementItem({
       {relationships.length > 0 &&
         relationships.map((rel, idx) => {
           const relType =
-            rel.type === "labelledby" ? "aria-labelledby" : "aria-describedby";
+            rel.type === "labelledby"
+              ? "aria-labelledby"
+              : rel.type === "describedby"
+                ? "aria-describedby"
+                : rel.type === "haspopup"
+                  ? "aria-haspopup"
+                  : "aria-controls";
           return (
             <div key={idx} style={{ marginTop: "4px", fontSize: "0.8rem" }}>
               <span style={{ color: "#d97706", fontWeight: "600" }}>
                 {relType}
               </span>
-              {rel.targetIds.map((targetId) => {
-                const targetSelector =
-                  ariaRelationships?.idToSelector.get(targetId);
-                return (
-                  <span
-                    key={targetId}
-                    style={{
-                      marginLeft: "8px",
-                      color: "#94a3b8",
-                    }}
-                  >
-                    → {targetId}
-                    {targetSelector && ` (${targetSelector})`}
-                  </span>
-                );
-              })}
+              {rel.type === "haspopup" ? (
+                <span style={{ marginLeft: "8px", color: "#94a3b8" }}>
+                  → {rel.popupType || "(popup)"}
+                </span>
+              ) : (
+                rel.targetIds.map((targetId) => {
+                  const targetSelector =
+                    ariaRelationships?.idToSelector.get(targetId);
+                  return (
+                    <span
+                      key={targetId}
+                      style={{
+                        marginLeft: "8px",
+                        color: "#94a3b8",
+                      }}
+                    >
+                      → {targetId}
+                      {targetSelector && ` (${targetSelector})`}
+                    </span>
+                  );
+                })
+              )}
             </div>
           );
         })}
@@ -1778,6 +2118,20 @@ export function DOMAnalysisViewer({
     analysis;
   const violationTargets = buildViolationTargetMap(violations);
   const ariaRelationships = buildAriaRelationshipMaps(domTree || null);
+  // Debug: print relationship maps to help verify aria-controls / aria-haspopup
+  useEffect(() => {
+    try {
+      console.debug("[DOMAnalysisViewer] ariaRelationships:", {
+        idToSelector: Array.from(ariaRelationships.idToSelector.entries()),
+        selectorToRelationships: Array.from(
+          ariaRelationships.selectorToRelationships.entries(),
+        ).map(([sel, rels]) => [sel, rels]),
+        idToReferences: Array.from(ariaRelationships.idToReferences.entries()),
+      });
+    } catch {
+      // ignore in environments without console
+    }
+  }, [domTree, ariaRelationships]);
 
   // Collect available roles and aria attributes
   const availableRoles = collectRolesFromDomTree(domTree || null);
