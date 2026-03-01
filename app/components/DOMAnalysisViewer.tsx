@@ -1162,9 +1162,7 @@ function renderDomTree(
     node.tagName === "body" ||
     (depth === 2 &&
       (bodyChildOpenTags.has(node.tagName) || bodyChildOpenRoles.has(role)));
-  // When filters are active and this node matches, don't auto-open it
-  const shouldBeOpen =
-    forceExpandAll || (shouldOpenByDefault && !(filters && hasMatches));
+  const shouldBeOpen = forceExpandAll || shouldOpenByDefault;
   const visibleAttributes = Object.entries(node.attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
   );
@@ -1197,22 +1195,6 @@ function renderDomTree(
     : undefined;
   const isReferenced = referencedBy && referencedBy.length > 0;
 
-  // Build association info for display
-  const associationInfo = (() => {
-    const info: string[] = [];
-    if (hasRelationship) {
-      relationships!.forEach((rel) => {
-        info.push(`${rel.type}: ${rel.targetIds.join(", ")}`);
-      });
-    }
-    if (isReferenced) {
-      info.push(
-        `referenced by: ${referencedBy!.map((r) => r.type).join(", ")}`,
-      );
-    }
-    return info.length > 0 ? info.join(" | ") : null;
-  })();
-
   const showAssociationInfo =
     filters?.associationId && (hasRelationship || isReferenced);
 
@@ -1229,13 +1211,11 @@ function renderDomTree(
     .join(" ");
 
   // For elements without non-void children (or with ARIA relationships), show complete tag with closing on same line
-  // However, if this node has matches and filters are active, always render as toggleable
   if (
     (!hasNonVoidElementChildren ||
       hasDescribedByRelationship ||
       hasLabelledByRelationship) &&
-    !isVoid &&
-    !(filters && hasMatches)
+    !isVoid
   ) {
     return (
       <StyledTooltip
@@ -1250,24 +1230,6 @@ function renderDomTree(
         >
           {lineNumber !== undefined && (
             <span className="dom-tree-line-number">{lineNumber}</span>
-          )}
-          {hasMatches && (
-            <span
-              className="dom-tree-match-indicator"
-              title={[...matchInfo, associationInfo]
-                .filter(Boolean)
-                .join(" | ")}
-            >
-              ●
-            </span>
-          )}
-          {showAssociationInfo && !hasMatches && (
-            <span
-              className="dom-tree-match-indicator dom-tree-association-indicator"
-              title={associationInfo || ""}
-            >
-              ◆
-            </span>
           )}
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
@@ -1389,24 +1351,6 @@ function renderDomTree(
         >
           {lineNumber !== undefined && (
             <span className="dom-tree-line-number">{lineNumber}</span>
-          )}
-          {hasMatches && (
-            <span
-              className="dom-tree-match-indicator"
-              title={[...matchInfo, associationInfo]
-                .filter(Boolean)
-                .join(" | ")}
-            >
-              ●
-            </span>
-          )}
-          {showAssociationInfo && !hasMatches && (
-            <span
-              className="dom-tree-match-indicator dom-tree-association-indicator"
-              title={associationInfo || ""}
-            >
-              ◆
-            </span>
           )}
           {Object.keys(node.attributes).length === 0 ? (
             <span className="dom-tree-tag">
@@ -1596,24 +1540,6 @@ function renderDomTree(
         <summary className={`dom-tree-summary ${lineClass}`}>
           {lineNumber !== undefined && (
             <span className="dom-tree-line-number">{lineNumber}</span>
-          )}
-          {hasMatches && (
-            <span
-              className="dom-tree-match-indicator"
-              title={[...matchInfo, associationInfo]
-                .filter(Boolean)
-                .join(" | ")}
-            >
-              ●
-            </span>
-          )}
-          {showAssociationInfo && !hasMatches && (
-            <span
-              className="dom-tree-match-indicator dom-tree-association-indicator"
-              title={associationInfo || ""}
-            >
-              ◆
-            </span>
           )}
           {lineContent}
         </summary>
@@ -1870,26 +1796,18 @@ export function DOMAnalysisViewer({
       );
 
     elements?.forEach((element) => {
-      const isMatchNode = element.getAttribute("data-has-match") === "true";
-      const isInHighlightedBranch =
-        element.getAttribute("data-under-highlight-branch") === "true";
-
       if (element.getAttribute("data-initialized") !== "true") {
-        // If filters are active and this is a matched/highlighted node, initialize as closed
-        if (hasActiveDomTreeFilters && (isMatchNode || isInHighlightedBranch)) {
-          element.open = false;
-        }
+        element.open = element.getAttribute("data-default-open") === "true";
         element.setAttribute("data-initialized", "true");
       }
 
       if (hasActiveDomTreeFilters) {
-        // Reset user-opened only for matched/highlighted nodes so they respect the closed default
-        if (isMatchNode || isInHighlightedBranch) {
-          element.removeAttribute("data-user-opened");
-        }
-
         if (!element.hasAttribute("data-user-opened")) {
-          element.open = !(isMatchNode || isInHighlightedBranch);
+          const isMatchNode = element.getAttribute("data-has-match") === "true";
+          const isInHighlightedBranch =
+            element.getAttribute("data-under-highlight-branch") === "true";
+          // Open matched nodes to show them, close container nodes that just contain matches
+          element.open = isMatchNode || !isInHighlightedBranch;
         }
       } else if (!element.hasAttribute("data-user-opened")) {
         const isMainSection =
@@ -1935,13 +1853,10 @@ export function DOMAnalysisViewer({
         : null;
     };
 
-    const MAX_AUTO_OPEN_CHAIN_DEPTH = 3;
-
     const openSingleChildToggleChain = (root: HTMLDetailsElement) => {
       let current: HTMLDetailsElement | null = root;
-      let depth = 0;
 
-      while (current && depth < MAX_AUTO_OPEN_CHAIN_DEPTH) {
+      while (current) {
         const nestedDetails = getSingleNestedDetails(current);
         if (!nestedDetails || nestedDetails.hasAttribute("data-user-opened")) {
           break;
@@ -1950,7 +1865,6 @@ export function DOMAnalysisViewer({
         nestedDetails.open = true;
         nestedDetails.setAttribute("data-user-opened", "true");
         current = nestedDetails;
-        depth += 1;
       }
     };
 
@@ -2374,7 +2288,7 @@ export function DOMAnalysisViewer({
                 0,
                 violationTargets,
                 ariaRelationships,
-                false,
+                hasActiveDomTreeFilters,
                 domTreeFilters,
                 { current: 0 },
               )

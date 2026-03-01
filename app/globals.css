@@ -1471,7 +1471,8 @@ input[type="text"]:focus {
 }
 
 .dom-tree-line.dom-tree-closing.dom-tree-match {
-  margin-left: 76px;
+  margin-left: 0;
+  padding-left: 79px;
 }
 .dom-tree-match {
   background: rgba(253, 224, 71, 0.1);
