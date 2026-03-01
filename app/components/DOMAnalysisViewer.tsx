@@ -1077,6 +1077,28 @@ function canAriaAttrProduceMatches(
   return hasMatch(domTree);
 }
 
+function collectFilteredNodes(
+  node: DOMTreeNode,
+  filters: DomTreeFilters,
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  },
+  collected: DOMTreeNode[] = [],
+): DOMTreeNode[] {
+  if (nodeMatchesDomTreeFilters(node, filters, ariaRelationships)) {
+    collected.push(node);
+  }
+  (node.children || []).forEach((child) =>
+    collectFilteredNodes(child, filters, ariaRelationships, collected),
+  );
+  return collected;
+}
+
 function renderDomTree(
   node: DOMTreeNode,
   depth: number,
@@ -1622,6 +1644,182 @@ function renderDomTree(
   );
 }
 
+function FilteredElementItem({
+  node,
+  ariaRelationships,
+  filters,
+}: {
+  node: DOMTreeNode;
+  ariaRelationships?: {
+    idToSelector: Map<string, string>;
+    selectorToRelationships: Map<string, AriaRelationship[]>;
+    idToReferences: Map<
+      string,
+      { selector: string; type: "labelledby" | "describedby" }[]
+    >;
+  };
+  filters: DomTreeFilters;
+}) {
+  const relationships =
+    ariaRelationships?.selectorToRelationships.get(node.selector) || [];
+  const elementId = node.attributes.id;
+  const references =
+    (elementId && ariaRelationships?.idToReferences.get(elementId)) || [];
+
+  // Check if an attribute matches the active filter
+  const isAttributeFiltered = (attrName: string): boolean => {
+    if (attrName === "role" && filters.roles.length > 0) return true;
+    if (attrName.startsWith("aria-") && filters.ariaAttrs.includes(attrName))
+      return true;
+    if (attrName === "id" && filters.associationId) return true;
+    return false;
+  };
+
+  // Render attributes inline
+  const renderAttributesInline = () => {
+    const attrs = Object.entries(node.attributes);
+    if (attrs.length === 0) return null;
+
+    return attrs.map(([name, value]) => {
+      const isFiltered = isAttributeFiltered(name);
+      return (
+        <span key={name}>
+          {" "}
+          <span
+            style={{
+              background: isFiltered
+                ? "rgba(251, 191, 36, 0.25)"
+                : "transparent",
+              padding: "2px 4px",
+              borderRadius: "3px",
+              color: isFiltered ? "#fbbf24" : "#94a3b8",
+              fontWeight: isFiltered ? "600" : "normal",
+            }}
+          >
+            {name}=&quot;{value}&quot;
+          </span>
+        </span>
+      );
+    });
+  };
+
+  // Render children in minimal format
+  const renderChildrenMinimal = () => {
+    if (!node.children || node.children.length === 0) return null;
+
+    return node.children.map((child, idx) => {
+      const childAttrs = Object.entries(child.attributes);
+      const hasAttrs = childAttrs.length > 0;
+
+      return (
+        <span
+          key={idx}
+          style={{ marginLeft: "4px", color: "#64748b", opacity: 0.6 }}
+        >
+          <span>&lt;{child.tagName}</span>
+          {hasAttrs &&
+            childAttrs.map(([name, value]) => (
+              <span key={name}>
+                {" "}
+                <span>
+                  {name}=&quot;
+                  {value.length > 30 ? value.substring(0, 30) + "..." : value}
+                  &quot;
+                </span>
+              </span>
+            ))}
+          <span>&gt;</span>
+          {child.textSnippet && <span>{child.textSnippet}</span>}
+          <span>&lt;/{child.tagName}&gt;</span>
+        </span>
+      );
+    });
+  };
+
+  return (
+    <div
+      style={{
+        marginBottom: "12px",
+        padding: "12px",
+        background: "rgba(79, 70, 229, 0.05)",
+        border: "1px solid rgba(79, 70, 229, 0.2)",
+        borderRadius: "6px",
+        fontFamily: "monospace",
+        fontSize: "0.85rem",
+        lineHeight: "1.6",
+      }}
+    >
+      {/* Main element in one line */}
+      <div style={{ color: "#cbd5e1", marginBottom: "4px" }}>
+        <span style={{ color: "#38bdf8" }}>&lt;{node.tagName}</span>
+        {renderAttributesInline()}
+        <span style={{ color: "#38bdf8" }}>&gt;</span>
+        {node.textSnippet && (
+          <span style={{ color: "#cbd5f5", marginLeft: "4px" }}>
+            {node.textSnippet}
+          </span>
+        )}
+        {renderChildrenMinimal()}
+        <span style={{ color: "#38bdf8" }}>&lt;/{node.tagName}&gt;</span>
+      </div>
+
+      {/* Show ARIA relationships */}
+      {relationships.length > 0 &&
+        relationships.map((rel, idx) => {
+          const relType =
+            rel.type === "labelledby" ? "aria-labelledby" : "aria-describedby";
+          return (
+            <div key={idx} style={{ marginTop: "4px", fontSize: "0.8rem" }}>
+              <span style={{ color: "#d97706", fontWeight: "600" }}>
+                {relType}
+              </span>
+              {rel.targetIds.map((targetId) => {
+                const targetSelector =
+                  ariaRelationships?.idToSelector.get(targetId);
+                return (
+                  <span
+                    key={targetId}
+                    style={{
+                      marginLeft: "8px",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    → {targetId}
+                    {targetSelector && ` (${targetSelector})`}
+                  </span>
+                );
+              })}
+            </div>
+          );
+        })}
+
+      {/* Show references from other elements */}
+      {references.length > 0 && (
+        <div style={{ marginTop: "4px", fontSize: "0.8rem" }}>
+          <span style={{ color: "#ec4899", fontWeight: "600" }}>
+            Referenced by:
+          </span>
+          {references.map((ref, idx) => (
+            <span
+              key={idx}
+              style={{
+                marginLeft: "8px",
+                color: "#94a3b8",
+              }}
+            >
+              ←{" "}
+              {ref.type === "labelledby"
+                ? "aria-labelledby"
+                : "aria-describedby"}{" "}
+              from {ref.selector}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function DOMAnalysisViewer({
   analysis,
   violations = [],
@@ -1744,6 +1942,13 @@ export function DOMAnalysisViewer({
   const filteredDomTree = domTree
     ? filterDomTreeByFilters(domTree, domTreeFilters, ariaRelationships)
     : null;
+
+  // Collect all nodes that match the filter
+  const filteredNodes =
+    domTree && hasActiveDomTreeFilters
+      ? collectFilteredNodes(domTree, domTreeFilters, ariaRelationships)
+      : [];
+
   const groupedRoles = roles.reduce<
     Array<{
       role: string;
@@ -2058,6 +2263,36 @@ export function DOMAnalysisViewer({
             semantics are highlighted. ARIA relationships
             (labelledby/describedby) shown with →LABEL/→DESC and ←REF badges.
           </p>
+          {filteredNodes.length > 0 && (
+            <div
+              style={{
+                marginBottom: "20px",
+                padding: "16px",
+                background: "rgba(79, 70, 229, 0.08)",
+                border: "1px solid rgba(79, 70, 229, 0.3)",
+                borderRadius: "8px",
+              }}
+            >
+              <h4
+                style={{
+                  margin: "0 0 12px 0",
+                  color: "#4f46e5",
+                  fontSize: "1rem",
+                  fontWeight: "600",
+                }}
+              >
+                Filtered Elements ({filteredNodes.length})
+              </h4>
+              {filteredNodes.map((node, idx) => (
+                <FilteredElementItem
+                  key={`${node.selector}-${idx}`}
+                  node={node}
+                  ariaRelationships={ariaRelationships}
+                  filters={domTreeFilters}
+                />
+              ))}
+            </div>
+          )}
           <div className="dom-tree" ref={domTreeContainerRef}>
             {filteredDomTree ? (
               renderDomTree(
