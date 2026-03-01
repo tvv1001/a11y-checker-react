@@ -452,6 +452,49 @@ function getARIAAttributeTooltip(name: string, value: string): string {
   return tooltip;
 }
 
+// Scroll to and briefly highlight an attribute element inside the dom tree container
+function scrollToAndHighlightAttribute(
+  container: HTMLElement | null | undefined,
+  selector: string,
+  attrName: string,
+) {
+  if (!container) {
+    const docWrap = document.querySelector<HTMLElement>(".dom-tree");
+    container = docWrap || undefined;
+  }
+  if (!container) return;
+
+  // Find the element wrapper that has data-selector attribute equal to selector
+  const wrappers = Array.from(
+    container.querySelectorAll<HTMLElement>("[data-selector]"),
+  );
+  const wrapper = wrappers.find(
+    (w) => w.getAttribute("data-selector") === selector,
+  );
+  if (!wrapper) return;
+
+  const target = wrapper.querySelector<HTMLElement>(
+    `[data-attr-name="${attrName}"]`,
+  );
+  if (!target) return;
+
+  try {
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  } catch {
+    // ignore if not supported
+  }
+
+  const prevOutline = target.style.outline;
+  target.style.outline = "3px solid rgba(59,130,246,0.8)";
+  setTimeout(() => {
+    target.style.outline = prevOutline || "";
+  }, 2500);
+  // Try to focus so tooltip components that show on focus can appear
+  try {
+    (target as HTMLElement).focus();
+  } catch {}
+}
+
 function renderAttributes(
   attributes: Record<string, string>,
   elementTag?: string,
@@ -528,14 +571,6 @@ function renderAttributes(
           .filter(Boolean)
           .join(" ");
 
-        const badge = (
-          <span className={highlightedClass}>
-            <span className="dom-attr-name">{name}</span>
-            <span className="dom-attr-equals">=</span>
-            <span className="dom-attr-value">&quot;{value}&quot;</span>
-          </span>
-        );
-
         const finalTooltip = invalidAttrMessage
           ? invalidAttrMessage
           : roleTooltip
@@ -550,14 +585,25 @@ function renderAttributes(
             content={`[ARIA] ${finalTooltip}`}
             className="dom-attr-tooltip"
           >
-            <span className={highlightedClass + invalidClass}>
+            <span
+              className={highlightedClass + invalidClass}
+              data-selector={nodeSelector}
+              data-attr-name={name}
+              tabIndex={0}
+            >
               <span className="dom-attr-name">{name}</span>
               <span className="dom-attr-equals">=</span>
               <span className="dom-attr-value">&quot;{value}&quot;</span>
             </span>
           </StyledTooltip>
         ) : (
-          <span key={name} className={highlightedClass + invalidClass}>
+          <span
+            key={name}
+            className={highlightedClass + invalidClass}
+            data-selector={nodeSelector}
+            data-attr-name={name}
+            tabIndex={0}
+          >
             <span className="dom-attr-name">{name}</span>
             <span className="dom-attr-equals">=</span>
             <span className="dom-attr-value">&quot;{value}&quot;</span>
@@ -574,7 +620,12 @@ function renderAttributes(
 function buildViolationTargetMap(violations: Violation[]) {
   const map = new Map<
     string,
-    { count: number; hasWcag: boolean; hasAxe: boolean }
+    {
+      count: number;
+      hasWcag: boolean;
+      hasAxe: boolean;
+      relatedAttributes: string[];
+    }
   >();
 
   violations.forEach((violation) => {
@@ -586,15 +637,22 @@ function buildViolationTargetMap(violations: Violation[]) {
     violation.nodes.forEach((node) => {
       (node.target || []).forEach((selector) => {
         const existing = map.get(selector);
+        const violationRelated =
+          (violation as unknown as { relatedAttributes?: string[] })
+            .relatedAttributes || [];
         if (existing) {
           existing.count += 1;
           existing.hasWcag = existing.hasWcag || hasWcag;
           existing.hasAxe = existing.hasAxe || hasAxe;
+          existing.relatedAttributes = Array.from(
+            new Set([...existing.relatedAttributes, ...violationRelated]),
+          );
         } else {
           map.set(selector, {
             count: 1,
             hasWcag,
             hasAxe,
+            relatedAttributes: Array.from(new Set(violationRelated)),
           });
         }
       });
@@ -1347,7 +1405,12 @@ function renderDomTree(
   depth: number,
   violationTargets: Map<
     string,
-    { count: number; hasWcag: boolean; hasAxe: boolean }
+    {
+      count: number;
+      hasWcag: boolean;
+      hasAxe: boolean;
+      relatedAttributes: string[];
+    }
   >,
   ariaRelationships?: {
     idToSelector: Map<string, string>;
@@ -1479,6 +1542,7 @@ function renderDomTree(
           className={lineClass}
           style={{ marginLeft: `${depth + 8}px` }}
           data-line={lineNumber}
+          data-selector={node.selector}
         >
           {lineNumber !== undefined && (
             <span className="dom-tree-line-number">{lineNumber}</span>
@@ -1557,6 +1621,22 @@ function renderDomTree(
             {violationMeta?.hasAxe && (
               <span className="dom-badge axe">AXE</span>
             )}
+            {violationMeta?.relatedAttributes &&
+              violationMeta.relatedAttributes.map((attr) => (
+                <button
+                  key={attr}
+                  className="dom-badge attr-link"
+                  onClick={() =>
+                    scrollToAndHighlightAttribute(
+                      undefined,
+                      node.selector,
+                      attr,
+                    )
+                  }
+                >
+                  {attr}
+                </button>
+              ))}
             {violationMeta?.hasWcag && (
               <span className="dom-badge wcag">WCAG</span>
             )}
@@ -1646,6 +1726,7 @@ function renderDomTree(
           className={lineClass}
           style={{ marginLeft: `${depth + 8}px` }}
           data-line={lineNumber}
+          data-selector={node.selector}
         >
           {lineNumber !== undefined && (
             <span className="dom-tree-line-number">{lineNumber}</span>
@@ -1904,6 +1985,7 @@ function renderDomTree(
         data-under-highlight-branch={underHighlightedBranch ? "true" : "false"}
         data-default-open={shouldBeOpen ? "true" : "false"}
         data-initialized="false"
+        data-selector={node.selector}
         style={{ marginLeft: `${depth + 8}px` }}
         data-line={lineNumber}
       >
