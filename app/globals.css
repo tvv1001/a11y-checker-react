@@ -1469,6 +1469,10 @@ input[type="text"]:focus {
 .dom-tree-line.dom-tree-closing {
   margin-left: 50px;
 }
+
+.dom-tree-line.dom-tree-closing.dom-tree-match {
+  margin-left: 76px;
+}
 .dom-tree-match {
   background: rgba(253, 224, 71, 0.1);
   border-left: 2px solid #fde047;
@@ -1564,10 +1568,6 @@ input[type="text"]:focus {
 
 .dom-tree-tag {
   color: #38bdf8;
-}
-
-.dom-tree-closing {
-  margin-left: 50px;
 }
 
 .dom-tree-semantic .dom-tree-tag {

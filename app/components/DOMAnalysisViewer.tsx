@@ -1117,6 +1117,7 @@ function renderDomTree(
   forceExpandAll = false,
   filters?: DomTreeFilters,
   lineCounter?: { current: number },
+  underHighlightedBranch = false,
 ) {
   const lineNumber = lineCounter ? ++lineCounter.current : undefined;
   const matchInfo = filters
@@ -1161,7 +1162,9 @@ function renderDomTree(
     node.tagName === "body" ||
     (depth === 2 &&
       (bodyChildOpenTags.has(node.tagName) || bodyChildOpenRoles.has(role)));
-  const shouldBeOpen = forceExpandAll || shouldOpenByDefault;
+  // When filters are active and this node matches, don't auto-open it
+  const shouldBeOpen =
+    forceExpandAll || (shouldOpenByDefault && !(filters && hasMatches));
   const visibleAttributes = Object.entries(node.attributes).filter(
     ([name]) => name !== "class" && name !== "style" && name !== "inert",
   );
@@ -1226,11 +1229,13 @@ function renderDomTree(
     .join(" ");
 
   // For elements without non-void children (or with ARIA relationships), show complete tag with closing on same line
+  // However, if this node has matches and filters are active, always render as toggleable
   if (
     (!hasNonVoidElementChildren ||
       hasDescribedByRelationship ||
       hasLabelledByRelationship) &&
-    !isVoid
+    !isVoid &&
+    !(filters && hasMatches)
   ) {
     return (
       <StyledTooltip
@@ -1581,6 +1586,8 @@ function renderDomTree(
       <details
         className="dom-tree-details"
         data-depth={depth}
+        data-has-match={hasMatches ? "true" : "false"}
+        data-under-highlight-branch={underHighlightedBranch ? "true" : "false"}
         data-default-open={shouldBeOpen ? "true" : "false"}
         data-initialized="false"
         style={{ marginLeft: `${depth + 8}px` }}
@@ -1620,6 +1627,7 @@ function renderDomTree(
               forceExpandAll,
               filters,
               lineCounter,
+              underHighlightedBranch || hasMatches,
             ),
           )}
         </div>
@@ -1862,14 +1870,26 @@ export function DOMAnalysisViewer({
       );
 
     elements?.forEach((element) => {
+      const isMatchNode = element.getAttribute("data-has-match") === "true";
+      const isInHighlightedBranch =
+        element.getAttribute("data-under-highlight-branch") === "true";
+
       if (element.getAttribute("data-initialized") !== "true") {
-        element.open = element.getAttribute("data-default-open") === "true";
+        // If filters are active and this is a matched/highlighted node, initialize as closed
+        if (hasActiveDomTreeFilters && (isMatchNode || isInHighlightedBranch)) {
+          element.open = false;
+        }
         element.setAttribute("data-initialized", "true");
       }
 
       if (hasActiveDomTreeFilters) {
+        // Reset user-opened only for matched/highlighted nodes so they respect the closed default
+        if (isMatchNode || isInHighlightedBranch) {
+          element.removeAttribute("data-user-opened");
+        }
+
         if (!element.hasAttribute("data-user-opened")) {
-          element.open = true;
+          element.open = !(isMatchNode || isInHighlightedBranch);
         }
       } else if (!element.hasAttribute("data-user-opened")) {
         const isMainSection =
@@ -1879,14 +1899,68 @@ export function DOMAnalysisViewer({
         }
       }
     });
-  }, [hasActiveDomTreeFilters]);
+  }, [hasActiveDomTreeFilters, domTreeFilters]);
 
   // Track user interactions with details elements
   useEffect(() => {
+    const getSingleNestedDetails = (
+      detailsElement: HTMLDetailsElement,
+    ): HTMLDetailsElement | null => {
+      const childrenContainer = Array.from(detailsElement.children).find(
+        (child) =>
+          child instanceof HTMLElement &&
+          child.classList.contains("dom-tree-children"),
+      ) as HTMLElement | undefined;
+
+      if (!childrenContainer) {
+        return null;
+      }
+
+      const wrappers = Array.from(childrenContainer.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement,
+      );
+
+      if (wrappers.length !== 1) {
+        return null;
+      }
+
+      const directChildDetails = Array.from(wrappers[0].children).find(
+        (child) =>
+          child instanceof HTMLDetailsElement &&
+          child.classList.contains("dom-tree-details"),
+      );
+
+      return directChildDetails instanceof HTMLDetailsElement
+        ? directChildDetails
+        : null;
+    };
+
+    const MAX_AUTO_OPEN_CHAIN_DEPTH = 3;
+
+    const openSingleChildToggleChain = (root: HTMLDetailsElement) => {
+      let current: HTMLDetailsElement | null = root;
+      let depth = 0;
+
+      while (current && depth < MAX_AUTO_OPEN_CHAIN_DEPTH) {
+        const nestedDetails = getSingleNestedDetails(current);
+        if (!nestedDetails || nestedDetails.hasAttribute("data-user-opened")) {
+          break;
+        }
+
+        nestedDetails.open = true;
+        nestedDetails.setAttribute("data-user-opened", "true");
+        current = nestedDetails;
+        depth += 1;
+      }
+    };
+
     const handleToggle = (e: Event) => {
       const target = e.target as HTMLDetailsElement;
       if (target.classList.contains("dom-tree-details") && e.isTrusted) {
         target.setAttribute("data-user-opened", "true");
+        if (target.open) {
+          openSingleChildToggleChain(target);
+        }
       }
     };
 
@@ -2300,7 +2374,7 @@ export function DOMAnalysisViewer({
                 0,
                 violationTargets,
                 ariaRelationships,
-                hasActiveDomTreeFilters,
+                false,
                 domTreeFilters,
                 { current: 0 },
               )
