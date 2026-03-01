@@ -116,10 +116,10 @@ async function extractDOMStructure(
             break;
           }
 
-          const parent = current.parentElement;
+          const parent: Element | null = current.parentElement;
           if (parent) {
             const siblings = Array.from(parent.children).filter(
-              (child) => child.tagName === current!.tagName,
+              (child: Element) => child.tagName === current!.tagName,
             );
             if (siblings.length > 1) {
               const index = siblings.indexOf(current) + 1;
@@ -403,7 +403,7 @@ async function extractDOMStructure(
       return { headings, landmarks, roles, forms, focusable, domTree };
     });
 
-    return analyzeDOMStructure(domData);
+    return analyzeDOMStructure(domData as any);
   } catch (error) {
     console.error("Error extracting DOM structure:", error);
     return undefined;

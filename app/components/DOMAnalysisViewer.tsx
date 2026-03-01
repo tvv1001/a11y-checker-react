@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { DOMAnalysis, DOMTreeNode } from "@/lib/dom-analyzer";
 import type { Violation } from "@/lib/types";
 import { getARIARole } from "@/lib/aria-roles-reference";
@@ -415,6 +415,36 @@ function getARIAAttributeTooltip(name: string, value: string): string {
       "Indicates reading order. Used to override natural DOM order",
     "aria-haspopup":
       "Indicates this element has a popup menu, dropdown, or dialog. Values: false (default, no popup), true (generic popup), menu (dropdown menu), listbox (listbox popup), tree (tree popup), grid (grid popup), dialog (dialog popup). Helps screen reader users understand that activating this element opens a popup",
+    "aria-activedescendant":
+      "Identifies the currently active descendant of a composite widget (used with roving focus patterns)",
+    "aria-autocomplete":
+      "Indicates whether user input completion suggestions are provided (none, inline, list, both)",
+    "aria-orientation":
+      "Indicates orientation of a widget (horizontal or vertical)",
+    "aria-keyshortcuts":
+      "Provides a space-separated list of keyboard shortcuts that activate or focus the element",
+    "aria-posinset":
+      "Position of an item within a set (used with aria-setsize)",
+    "aria-setsize":
+      "Total number of items in the set (used with aria-posinset)",
+    "aria-valuetext":
+      "Human-readable text alternative of the current value for range widgets",
+    "aria-roledescription":
+      "Allows authors to provide a human readable, author-localized description for the role",
+    "aria-errormessage":
+      "References the element that provides an error message for a form field",
+    "aria-multiselectable":
+      "Indicates that the user may select more than one item from the current set",
+    "aria-placeholder":
+      "Provides a short hint describing the expected value of an input",
+    "aria-dropeffect":
+      "(Deprecated) Historically indicated expected drag-and-drop operation; avoid using",
+    "aria-grabbed":
+      "(Deprecated) Indicates whether an element is grabbed for a drag-and-drop operation",
+    "aria-description":
+      "References or contains a short description of the element's purpose or content",
+    "aria-details":
+      "References an element that provides a detailed, extended description",
   };
 
   const description = ariaAttributeInfo[name] || `${name} attribute`;
@@ -520,9 +550,11 @@ function renderAttributes(
             content={`[ARIA] ${finalTooltip}`}
             className="dom-attr-tooltip"
           >
-            {React.cloneElement(badge as any, {
-              className: highlightedClass + invalidClass,
-            })}
+            <span className={highlightedClass + invalidClass}>
+              <span className="dom-attr-name">{name}</span>
+              <span className="dom-attr-equals">=</span>
+              <span className="dom-attr-value">&quot;{value}&quot;</span>
+            </span>
           </StyledTooltip>
         ) : (
           <span key={name} className={highlightedClass + invalidClass}>
@@ -705,7 +737,11 @@ function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
       }
 
       if (validation.details) {
-        relationship.validation = validation as any;
+        relationship.validation = validation as {
+          roleMatches: boolean;
+          expectedRole?: string;
+          details: string;
+        };
       }
 
       const existing = selectorToRelationships.get(current.selector) || [];
@@ -1289,7 +1325,10 @@ function collectFilteredNodes(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" | "controls" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
   collected: DOMTreeNode[] = [],
@@ -1315,7 +1354,10 @@ function renderDomTree(
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" | "controls" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   },
   forceExpandAll = false,
@@ -1917,7 +1959,10 @@ function FilteredElementItem({
     selectorToRelationships: Map<string, AriaRelationship[]>;
     idToReferences: Map<
       string,
-      { selector: string; type: "labelledby" | "describedby" | "controls" }[]
+      {
+        selector: string;
+        type: "labelledby" | "describedby" | "controls" | "haspopup";
+      }[]
     >;
   };
   filters: DomTreeFilters;
@@ -2117,7 +2162,10 @@ export function DOMAnalysisViewer({
   const { headings, landmarks, roles, forms, focusable, summary, domTree } =
     analysis;
   const violationTargets = buildViolationTargetMap(violations);
-  const ariaRelationships = buildAriaRelationshipMaps(domTree || null);
+  const ariaRelationships = useMemo(
+    () => buildAriaRelationshipMaps(domTree || null),
+    [domTree],
+  );
   // Debug: print relationship maps to help verify aria-controls / aria-haspopup
   useEffect(() => {
     try {
@@ -2133,9 +2181,15 @@ export function DOMAnalysisViewer({
     }
   }, [domTree, ariaRelationships]);
 
-  // Collect available roles and aria attributes
-  const availableRoles = collectRolesFromDomTree(domTree || null);
-  const availableAriaAttrs = collectAriaAttributesFromDomTree(domTree || null);
+  // Collect available roles and aria attributes (memoized)
+  const availableRoles = useMemo(
+    () => collectRolesFromDomTree(domTree || null),
+    [domTree],
+  );
+  const availableAriaAttrs = useMemo(
+    () => collectAriaAttributesFromDomTree(domTree || null),
+    [domTree],
+  );
   const hasActiveDomTreeFilters =
     domTreeFilters.roles.length > 0 ||
     domTreeFilters.ariaAttrs.length > 0 ||

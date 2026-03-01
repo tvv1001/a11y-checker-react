@@ -581,14 +581,6 @@ export default function Home() {
 
   return (
     <div className="container">
-      {/* Header */}
-      <header className="header" role="banner">
-        <h1>WCAG Compliance Checker</h1>
-        <p className="subtitle">
-          Check web accessibility from WCAG 2.0 A to WCAG 2.2 AA
-        </p>
-      </header>
-
       {/* Input Section */}
       <div className="input-section" role="search">
         <label htmlFor="urlInput" className="input-label">

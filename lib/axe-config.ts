@@ -19,6 +19,8 @@ export interface FormattedViolation {
   help: string;
   helpUrl?: string;
   impact: string;
+  // Optional list of ARIA attributes related to this rule to help link to guidance
+  relatedAttributes?: string[];
   tags: string[];
   nodes: {
     html: string;
@@ -108,8 +110,22 @@ export function formatViolations(violations: Result[]): FormattedViolation[] {
       failureSummary: node.failureSummary,
     })),
     nodeCount: violation.nodes.length,
+    relatedAttributes: AXE_RULE_TO_ATTRIBUTES[violation.id] ?? undefined,
   }));
 }
+
+// Map axe rule ids to ARIA attributes (helps the UI link a rule to an attribute tooltip)
+const AXE_RULE_TO_ATTRIBUTES: Record<string, string[]> = {
+  "aria-activedescendant": ["aria-activedescendant"],
+  "aria-hidden-focus": ["aria-hidden"],
+  "aria-required-attr": ["aria-required"],
+  "aria-roles": ["role"],
+  "aria-allowed-attr": [],
+  "aria-valid-attr-value": [],
+  "aria-errormessage": ["aria-errormessage"],
+  "aria-dialog-name": ["aria-labelledby", "aria-label"],
+  "aria-required-parent": [],
+};
 
 /**
  * Process complete axe scan results

@@ -229,7 +229,13 @@ export const ARIA_ROLES_REFERENCE: Record<string, ARIARole> = {
       "Provide associated label",
     ],
     nativeHTMLEquivalent: '<input type="text">, <textarea>',
-    relatedAttributes: ["aria-label", "aria-multiline"],
+    relatedAttributes: [
+      "aria-label",
+      "aria-multiline",
+      "aria-placeholder",
+      "aria-autocomplete",
+      "aria-valuetext",
+    ],
   },
   grid: {
     name: "grid",
@@ -417,6 +423,7 @@ export const ARIA_ROLES_REFERENCE: Record<string, ARIARole> = {
       "Announces number of items",
     ],
     nativeHTMLEquivalent: "<ul>, <ol>",
+    relatedAttributes: ["aria-posinset", "aria-setsize"],
   },
   listitem: {
     name: "listitem",
@@ -430,6 +437,7 @@ export const ARIA_ROLES_REFERENCE: Record<string, ARIARole> = {
       "Announces item number in list",
     ],
     nativeHTMLEquivalent: "<li>",
+    relatedAttributes: ["aria-posinset", "aria-setsize"],
   },
   figure: {
     name: "figure",
