@@ -400,10 +400,17 @@ async function extractDOMStructure(
       // Build DOM tree from the entire document to capture full rendered HTML
       const domTree = buildDomTree(document.documentElement, 0);
 
-      return { headings, landmarks, roles, forms, focusable, domTree };
+      return {
+        headings,
+        landmarks,
+        roles,
+        forms,
+        focusable,
+        domTree: domTree === null ? undefined : domTree,
+      };
     });
 
-    return analyzeDOMStructure(domData as any);
+    return analyzeDOMStructure(domData);
   } catch (error) {
     console.error("Error extracting DOM structure:", error);
     return undefined;

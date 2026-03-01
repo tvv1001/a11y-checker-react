@@ -1612,6 +1612,16 @@ input[type="text"]:focus {
   margin-left: 6px;
 }
 
+.dom-attr.role.dom-attr-associated,
+.dom-attr.aria.dom-attr-associated,
+.dom-attr.id.dom-attr-associated {
+  background-color: rgba(59, 130, 246, 0.15);
+  border: 1px solid #3b82f6;
+  border-radius: 3px;
+  padding: 2px 4px;
+  margin-left: 4px;
+}
+
 .dom-attr-name {
   color: #a5b4fc;
 }

@@ -1,15 +1,56 @@
 "use client";
 
 import React from "react";
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { DOMAnalysis, DOMTreeNode } from "@/lib/dom-analyzer";
 import type { Violation } from "@/lib/types";
+import type { DomTreeFilters } from "@/lib/dom-tree-types";
 import { getARIARole } from "@/lib/aria-roles-reference";
+import {
+  getARIAAttributeTooltip,
+  getSemanticTagDescription,
+} from "@/lib/aria-tooltips";
+import { buildAriaRelationshipMaps } from "@/lib/aria-relationships";
+import {
+  filterDomTreeByFilters,
+  collectFilteredNodes,
+  canRoleProduceMatches,
+  canAriaAttrProduceMatches,
+  collectRolesFromDomTree,
+  collectAriaAttributesFromDomTree,
+  getNodeMatchInfo,
+  buildViolationTargetMap,
+} from "@/lib/dom-tree-utils";
+import {
+  SEMANTIC_TAGS,
+  VOID_ELEMENTS,
+  MAX_ATTRS_PER_NODE,
+} from "./DomTree/DomTreeConstants";
+import {
+  useDomTreeFilters,
+  useDetailsElements,
+  useFilterSectionExpansion,
+  useRoleGroupExpansion,
+} from "./DomTree/DomTreeHooks";
 import { StyledTooltip } from "./StyledTooltip";
 
 interface DOMAnalysisViewerProps {
   analysis: DOMAnalysis;
   violations?: Violation[];
+}
+
+interface AriaRelationship {
+  type: "labelledby" | "describedby" | "controls" | "haspopup";
+  targetIds: string[];
+  sourceSelector: string;
+  popupType?: string;
+  validation?: {
+    expectedRole?: string;
+    roleMatches?: boolean;
+    expectedChildRole?: string;
+    itemsHaveExpectedChildRole?: boolean;
+    details?: string;
+  };
 }
 
 function generateFocusableHTML(
@@ -222,126 +263,8 @@ function filterSequentialHeadings(
   });
 }
 
-const SEMANTIC_TAGS = new Set([
-  // HTML5 Semantic/Structural elements
-  "header",
-  "nav",
-  "search",
-  "main",
-  "section",
-  "article",
-  "aside",
-  "footer",
-  "figure",
-  "figcaption",
-  "details",
-  "summary",
-  "dialog",
-  "mark",
-  "time",
-  // Form elements
-  "form",
-  "label",
-  "button",
-  "input",
-  "select",
-  "textarea",
-  "datalist",
-  "fieldset",
-  "legend",
-  "meter",
-  "output",
-  "progress",
-  "optgroup",
-  "option",
-  // Media elements
-  "audio",
-  "video",
-  "canvas",
-  "svg",
-  "img",
-  "picture",
-  // Links and navigation
-  "a",
-  // Headings
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  // Lists
-  "ul",
-  "ol",
-  "li",
-  "dl",
-  "dt",
-  "dd",
-  // Text content
-  "p",
-  "blockquote",
-  "pre",
-  "code",
-  "hr",
-  // Table
-  "table",
-  "thead",
-  "tbody",
-  "tfoot",
-  "tr",
-  "th",
-  "td",
-  "caption",
-  "colgroup",
-  // Text semantics
-  "abbr",
-  "cite",
-  "dfn",
-  "em",
-  "kbd",
-  "samp",
-  "strong",
-  "var",
-  "sub",
-  "sup",
-  "small",
-  "b",
-  "i",
-  "s",
-  "u",
-  "q",
-  "data",
-  "ruby",
-  "rt",
-  "rp",
-  "bdi",
-  "bdo",
-  // Embedded content
-  "iframe",
-  "embed",
-  "object",
-  // Document sections
-  "address",
-]);
-
-const VOID_ELEMENTS = new Set([
-  "area",
-  "base",
-  "br",
-  "col",
-  "embed",
-  "hr",
-  "img",
-  "input",
-  "link",
-  "meta",
-  "param",
-  "source",
-  "track",
-  "wbr",
-]);
-
-const MAX_ATTRS_PER_NODE = 12;
+// Constants imported from ./DomTree/DomTreeConstants
+// SEMANTIC_TAGS, VOID_ELEMENTS, MAX_ATTRS_PER_NODE
 
 function getAttributeClass(attributeName: string) {
   if (attributeName === "role") return "dom-attr role";
@@ -360,97 +283,7 @@ function getAttributeClass(attributeName: string) {
   return "dom-attr";
 }
 
-function getARIAAttributeTooltip(name: string, value: string): string {
-  const ariaAttributeInfo: Record<string, string> = {
-    "aria-label":
-      "Provides an accessible name. Used when there is no visible text label. Screen readers announce: ",
-    "aria-labelledby":
-      "Links to element(s) that label this element using their ID. Provides accessible name from linked element(s). Screen readers announce: ",
-    "aria-describedby":
-      "Links to element(s) that describe this element. Provides extended description. Screen readers announce: ",
-    "aria-value":
-      "Indicates the current value of a range widget (slider, progress bar, etc.)",
-    "aria-valuemin": "Indicates the minimum value for a range widget",
-    "aria-valuemax": "Indicates the maximum value for a range widget",
-    "aria-valuenow": "Indicates the current numeric value for a range widget",
-    "aria-hidden":
-      "Tells assistive tech to hide element. Use only on decorative/duplicate content",
-    "aria-live":
-      "Announces dynamic content updates. polite=waits for pause, assertive=interrupts",
-    "aria-atomic":
-      "When true, announces entire region on update, not just changes",
-    "aria-relevant":
-      "Specifies what dynamic changes trigger announcements (additions, removals, text, all)",
-    "aria-busy": "Indicates asynchronous operation in progress (true/false)",
-    "aria-pressed":
-      "For toggle buttons. Indicates button state: true, false, or mixed",
-    "aria-current":
-      "Marks the element as representing the current item (page, step, location, time, etc.)",
-    "aria-expanded": "For collapsible elements. true=expanded, false=collapsed",
-    "aria-disabled":
-      "Indicates whether element is disabled. Note: use HTML disabled attribute when possible",
-    "aria-readonly": "Indicates element should not be modified by user",
-    "aria-required":
-      "Indicates form field is required. Note: use HTML required attribute when possible",
-    "aria-invalid":
-      "Indicates field has invalid data. true=invalid, false=valid, grammar/spelling for type",
-    "aria-checked":
-      "For checkboxes/radio buttons. true=checked, false=unchecked, mixed=partially checked",
-    "aria-selected": "For selectable items. true=selected, false=not selected",
-    "aria-modal": "For dialogs. true=modal (traps focus), false=modeless",
-    "aria-sort":
-      "For sortable columns. ascending/descending/none/other to indicate sort direction",
-    "aria-rowcount": "Number of rows in a table/grid (use with aria-rowindex)",
-    "aria-colcount": "Number of columns in a table/grid",
-    "aria-rowindex": "Row position in table/grid structure",
-    "aria-colindex": "Column position in table/grid structure",
-    "aria-level":
-      "For headings in non-h1-h6 elements. Value 1-6 indicates heading level",
-    "aria-multiline":
-      "For textbox role. Indicates if single-line or multi-line input",
-    "aria-owns":
-      "Establishes parent-child relationship for elements not in DOM hierarchy",
-    "aria-controls": "Indicates this element controls another element by ID",
-    "aria-flowto":
-      "Indicates reading order. Used to override natural DOM order",
-    "aria-haspopup":
-      "Indicates this element has a popup menu, dropdown, or dialog. Values: false (default, no popup), true (generic popup), menu (dropdown menu), listbox (listbox popup), tree (tree popup), grid (grid popup), dialog (dialog popup). Helps screen reader users understand that activating this element opens a popup",
-    "aria-activedescendant":
-      "Identifies the currently active descendant of a composite widget (used with roving focus patterns)",
-    "aria-autocomplete":
-      "Indicates whether user input completion suggestions are provided (none, inline, list, both)",
-    "aria-orientation":
-      "Indicates orientation of a widget (horizontal or vertical)",
-    "aria-keyshortcuts":
-      "Provides a space-separated list of keyboard shortcuts that activate or focus the element",
-    "aria-posinset":
-      "Position of an item within a set (used with aria-setsize)",
-    "aria-setsize":
-      "Total number of items in the set (used with aria-posinset)",
-    "aria-valuetext":
-      "Human-readable text alternative of the current value for range widgets",
-    "aria-roledescription":
-      "Allows authors to provide a human readable, author-localized description for the role",
-    "aria-errormessage":
-      "References the element that provides an error message for a form field",
-    "aria-multiselectable":
-      "Indicates that the user may select more than one item from the current set",
-    "aria-placeholder":
-      "Provides a short hint describing the expected value of an input",
-    "aria-dropeffect":
-      "(Deprecated) Historically indicated expected drag-and-drop operation; avoid using",
-    "aria-grabbed":
-      "(Deprecated) Indicates whether an element is grabbed for a drag-and-drop operation",
-    "aria-description":
-      "References or contains a short description of the element's purpose or content",
-    "aria-details":
-      "References an element that provides a detailed, extended description",
-  };
-
-  const description = ariaAttributeInfo[name] || `${name} attribute`;
-  const tooltip = `${description}"${value}"`;
-  return tooltip;
-}
+// getARIAAttributeTooltip imported from @/lib/aria-tooltips
 
 // Scroll to and briefly highlight an attribute element inside the dom tree container
 function scrollToAndHighlightAttribute(
@@ -554,13 +387,24 @@ function renderAttributes(
           name === "id" &&
           (ariaRelationships?.idToReferences.get(value)?.length ?? 0) > 0;
 
-        // Check if this attribute references other IDs via aria-labelledby/describedby
-        const isReferencingAttribute =
-          (name === "aria-labelledby" || name === "aria-describedby") &&
-          (ariaRelationships?.selectorToRelationships.get(nodeSelector ?? "")
-            ?.length ?? 0) > 0;
+        // Check if this attribute is part of ARIA associations
+        const nodeRelationships =
+          ariaRelationships?.selectorToRelationships.get(nodeSelector ?? "") ||
+          [];
+        const isAriaAssociationAttribute =
+          (name === "aria-labelledby" ||
+            name === "aria-describedby" ||
+            name === "aria-controls" ||
+            name === "aria-haspopup") &&
+          nodeRelationships.length > 0;
 
-        const hasAssociation = isReferencedId || isReferencingAttribute;
+        // Check for menu-related associations
+        const isMenuRole =
+          (name === "role" && (value === "menu" || value === "menuitem")) ||
+          (name === "aria-haspopup" && value === "menu");
+
+        const hasAssociation =
+          isReferencedId || isAriaAssociationAttribute || isMenuRole;
 
         const attributeClass = getAttributeClass(name);
         const highlightedClass = [
@@ -617,314 +461,9 @@ function renderAttributes(
   );
 }
 
-function buildViolationTargetMap(violations: Violation[]) {
-  const map = new Map<
-    string,
-    {
-      count: number;
-      hasWcag: boolean;
-      hasAxe: boolean;
-      relatedAttributes: string[];
-    }
-  >();
+// buildViolationTargetMap imported from @/lib/dom-tree-utils
 
-  violations.forEach((violation) => {
-    const hasWcag = (violation.tags || []).some((tag) =>
-      tag.toLowerCase().startsWith("wcag"),
-    );
-    const hasAxe = true;
-
-    violation.nodes.forEach((node) => {
-      (node.target || []).forEach((selector) => {
-        const existing = map.get(selector);
-        const violationRelated =
-          (violation as unknown as { relatedAttributes?: string[] })
-            .relatedAttributes || [];
-        if (existing) {
-          existing.count += 1;
-          existing.hasWcag = existing.hasWcag || hasWcag;
-          existing.hasAxe = existing.hasAxe || hasAxe;
-          existing.relatedAttributes = Array.from(
-            new Set([...existing.relatedAttributes, ...violationRelated]),
-          );
-        } else {
-          map.set(selector, {
-            count: 1,
-            hasWcag,
-            hasAxe,
-            relatedAttributes: Array.from(new Set(violationRelated)),
-          });
-        }
-      });
-    });
-  });
-
-  return map;
-}
-
-interface AriaRelationship {
-  type: "labelledby" | "describedby" | "controls" | "haspopup";
-  targetIds: string[];
-  sourceSelector: string;
-  popupType?: string;
-  validation?: {
-    expectedRole?: string;
-    roleMatches?: boolean;
-    expectedChildRole?: string;
-    itemsHaveExpectedChildRole?: boolean;
-    details?: string;
-  };
-}
-
-interface DomTreeFilters {
-  roles: string[]; // array of selected roles (empty = no filter)
-  ariaAttrs: string[]; // array of selected aria attributes (empty = no filter)
-  associationId: boolean;
-  keyword: string;
-}
-
-function buildAriaRelationshipMaps(node: DOMTreeNode | null): {
-  idToSelector: Map<string, string>;
-  selectorToRelationships: Map<string, AriaRelationship[]>;
-  idToReferences: Map<
-    string,
-    {
-      selector: string;
-      type: "labelledby" | "describedby" | "controls" | "haspopup";
-    }[]
-  >;
-} {
-  const idToSelector = new Map<string, string>();
-  const idToNode = new Map<string, DOMTreeNode>();
-  const selectorToRelationships = new Map<string, AriaRelationship[]>();
-  const idToReferences = new Map<
-    string,
-    {
-      selector: string;
-      type: "labelledby" | "describedby" | "controls" | "haspopup";
-    }[]
-  >();
-
-  // First pass: collect id -> selector and id -> node maps
-  function collectIds(current: DOMTreeNode) {
-    if (current.attributes.id) {
-      idToSelector.set(current.attributes.id, current.selector);
-      idToNode.set(current.attributes.id, current);
-    }
-    current.children?.forEach(collectIds);
-  }
-
-  // Second pass: build relationships and basic validations
-  function collectRelationships(current: DOMTreeNode) {
-    const labelledBy = current.attributes["aria-labelledby"];
-    const describedBy = current.attributes["aria-describedby"];
-    const controls = current.attributes["aria-controls"];
-    const haspopup = current.attributes["aria-haspopup"];
-
-    if (labelledBy) {
-      const targetIds = labelledBy.split(/\s+/).filter(Boolean);
-      const relationship: AriaRelationship = {
-        type: "labelledby",
-        targetIds,
-        sourceSelector: current.selector,
-      };
-      const existing = selectorToRelationships.get(current.selector) || [];
-      selectorToRelationships.set(current.selector, [
-        ...existing,
-        relationship,
-      ]);
-      targetIds.forEach((id) => {
-        const refs = idToReferences.get(id) || [];
-        refs.push({ selector: current.selector, type: "labelledby" });
-        idToReferences.set(id, refs);
-      });
-    }
-
-    if (describedBy) {
-      const targetIds = describedBy.split(/\s+/).filter(Boolean);
-      const relationship: AriaRelationship = {
-        type: "describedby",
-        targetIds,
-        sourceSelector: current.selector,
-      };
-      const existing = selectorToRelationships.get(current.selector) || [];
-      selectorToRelationships.set(current.selector, [
-        ...existing,
-        relationship,
-      ]);
-      targetIds.forEach((id) => {
-        const refs = idToReferences.get(id) || [];
-        refs.push({ selector: current.selector, type: "describedby" });
-        idToReferences.set(id, refs);
-      });
-    }
-
-    if (controls) {
-      const targetIds = controls.split(/\s+/).filter(Boolean);
-      const relationship: AriaRelationship = {
-        type: "controls",
-        targetIds,
-        sourceSelector: current.selector,
-      };
-
-      // Basic validation: ensure targets exist; for common patterns, check expected roles
-      const validation = { roleMatches: true, details: "" } as {
-        roleMatches?: boolean;
-        expectedRole?: string;
-        details?: string;
-      };
-      const sourceRole = (current.attributes.role || "").toLowerCase();
-      if (sourceRole === "tab") {
-        validation.expectedRole = "tabpanel";
-      }
-
-      for (const id of targetIds) {
-        const targetNode = idToNode.get(id);
-        if (!targetNode) {
-          validation.roleMatches = false;
-          validation.details += `Target id=${id} not found. `;
-          continue;
-        }
-        if (validation.expectedRole) {
-          const roleAttr = (targetNode.attributes.role || "").toLowerCase();
-          if (roleAttr !== validation.expectedRole) {
-            validation.roleMatches = false;
-            validation.details += `Target ${id} role='${roleAttr || "(none)"}' expected '${validation.expectedRole}'. `;
-          }
-        }
-      }
-
-      if (validation.details) {
-        relationship.validation = validation as {
-          roleMatches: boolean;
-          expectedRole?: string;
-          details: string;
-        };
-      }
-
-      const existing = selectorToRelationships.get(current.selector) || [];
-      selectorToRelationships.set(current.selector, [
-        ...existing,
-        relationship,
-      ]);
-
-      // Track reverse relationship
-      targetIds.forEach((id) => {
-        const refs = idToReferences.get(id) || [];
-        refs.push({ selector: current.selector, type: "controls" });
-        idToReferences.set(id, refs);
-      });
-    }
-
-    if (haspopup) {
-      const popupType = String(haspopup).trim();
-      const relationship: AriaRelationship = {
-        type: "haspopup",
-        targetIds: [],
-        popupType,
-        sourceSelector: current.selector,
-      };
-
-      // Map popupType to expected roles and expected child roles
-      const expectedRoleFor = (val: string | undefined): string | undefined => {
-        if (!val) return undefined;
-        const v = val.toLowerCase();
-        if (v === "false") return undefined;
-        if (v === "true" || v === "menu") return "menu";
-        if (v === "listbox") return "listbox";
-        if (v === "tree") return "tree";
-        if (v === "grid") return "grid";
-        if (v === "dialog") return "dialog";
-        return undefined;
-      };
-
-      const expectedChildRoleFor = (
-        expectedRole?: string,
-      ): string | undefined => {
-        if (!expectedRole) return undefined;
-        if (expectedRole === "menu") return "menuitem";
-        if (expectedRole === "listbox") return "option";
-        if (expectedRole === "tree") return "treeitem";
-        if (expectedRole === "grid") return "gridcell";
-        return undefined;
-      };
-
-      if (controls) {
-        const targetIds = controls.split(/\s+/).filter(Boolean);
-        relationship.targetIds = targetIds;
-
-        const expectedRole = expectedRoleFor(popupType);
-        const expectedChildRole = expectedChildRoleFor(expectedRole);
-
-        const validation = {
-          expectedRole,
-          roleMatches: true,
-          expectedChildRole,
-          itemsHaveExpectedChildRole: true,
-          details: "",
-        } as {
-          expectedRole?: string;
-          roleMatches?: boolean;
-          expectedChildRole?: string;
-          itemsHaveExpectedChildRole?: boolean;
-          details?: string;
-        };
-
-        for (const id of targetIds) {
-          const targetNode = idToNode.get(id);
-          if (!targetNode) {
-            validation.roleMatches = false;
-            validation.details += `Target id=${id} not found. `;
-            continue;
-          }
-          if (expectedRole) {
-            const roleAttr = (targetNode.attributes.role || "").toLowerCase();
-            if (roleAttr !== expectedRole) {
-              validation.roleMatches = false;
-              validation.details += `Target ${id} role='${roleAttr || "(none)"}' expected '${expectedRole}'. `;
-            }
-          }
-
-          if (expectedChildRole) {
-            const descendants = targetNode.children || [];
-            const nonMatchingChildren = descendants.filter((d) => {
-              const r = (d.attributes.role || "").toLowerCase();
-              const likelyItemTag = [
-                "li",
-                "a",
-                "button",
-                "div",
-                "span",
-              ].includes(d.tagName);
-              return likelyItemTag && r !== expectedChildRole;
-            });
-            if (nonMatchingChildren.length > 0) {
-              validation.itemsHaveExpectedChildRole = false;
-              validation.details += `Some children of ${id} lack role='${expectedChildRole}'. `;
-            }
-          }
-        }
-
-        relationship.validation = validation;
-      }
-
-      const existing = selectorToRelationships.get(current.selector) || [];
-      selectorToRelationships.set(current.selector, [
-        ...existing,
-        relationship,
-      ]);
-    }
-
-    current.children?.forEach(collectRelationships);
-  }
-
-  if (node) {
-    collectIds(node);
-    collectRelationships(node);
-  }
-
-  return { idToSelector, selectorToRelationships, idToReferences };
-}
+// buildAriaRelationshipMaps is imported from @/lib/aria-relationships
 
 function getARIARoleTooltip(roleName: string, element?: string): string {
   const roleData = getARIARole(roleName);
@@ -963,442 +502,20 @@ function getARIARoleTooltip(roleName: string, element?: string): string {
   return tooltip;
 }
 
-function getSemanticTagDescription(tagName: string): string {
-  const semanticTagDescriptions: Record<string, string> = {
-    // Semantic/Structural (HTML5)
-    header:
-      "Represents introductory content or a group of introductory aids (logo, heading, search form, etc.)",
-    nav: "Contains navigation links for the document or site",
-    search:
-      "Contains a set of form controls for searching or filtering content",
-    main: "Specifies the main content of the document. Only one per page",
-    section: "Defines a thematic grouping of content",
-    article:
-      "Contains independent, self-contained content that could be distributed on its own",
-    aside:
-      "Contains content that is tangentially related to the main content (sidebars, related links)",
-    footer:
-      "Represents a footer for its nearest ancestor sectioning content or root element",
-    figure: "Represents self-contained content with optional caption",
-    figcaption: "Caption or legend for a figure element",
-    details: "Disclosure widget for hiding/showing additional details",
-    summary: "Summary, caption, or legend for a details element",
-    dialog: "Dialog box or interactive component (HTML5)",
-    mark: "Highlighted or marked text for reference purposes",
-    time: "Represents a date and/or time with machine-readable format",
-    address: "Contact information for author/owner of document",
-    // Form elements
-    form: "Contains form controls for user input and submission",
-    button: "A clickable button element for user interactions",
-    input: "Form control for user input (text, checkbox, radio, etc.)",
-    select: "Dropdown list for form input",
-    textarea: "Multi-line text input for forms",
-    label: "Associates a text label with a form control",
-    datalist: "Predefined options for input element (HTML5)",
-    fieldset: "Groups related form controls together",
-    legend: "Caption for a fieldset element",
-    meter: "Scalar measurement within a known range (HTML5)",
-    output: "Result of a calculation or user action (HTML5)",
-    progress: "Progress indicator for a task (HTML5)",
-    optgroup: "Group of options within a select element",
-    option: "Option within a select or datalist element",
-    // Media (HTML5)
-    audio: "Embeds sound content (HTML5)",
-    video: "Embeds video content (HTML5)",
-    canvas: "Graphics canvas for drawing via JavaScript (HTML5)",
-    svg: "Scalable Vector Graphics container (HTML5)",
-    img: "Embeds an image. Always include alt text for accessibility",
-    picture: "Container for multiple image sources (HTML5)",
-    // Links
-    a: "Hyperlink to other pages or resources",
-    // Headings
-    h1: "Heading level 1 - Main page heading. Use only once per page",
-    h2: "Heading level 2 - Major section heading",
-    h3: "Heading level 3 - Subsection heading",
-    h4: "Heading level 4 - Sub-subsection heading",
-    h5: "Heading level 5 - Minor heading",
-    h6: "Heading level 6 - Smallest heading",
-    // Lists
-    ul: "Unordered (bulleted) list",
-    ol: "Ordered (numbered) list",
-    li: "List item within ul or ol",
-    dl: "Description list (definition list)",
-    dt: "Term in a description list",
-    dd: "Description of a term in a description list",
-    // Text content
-    p: "Paragraph of text",
-    blockquote: "Extended quotation from another source",
-    pre: "Preformatted text with preserved whitespace",
-    code: "Fragment of computer code",
-    hr: "Thematic break or horizontal rule",
-    // Table
-    table: "Tabular data organized in rows and columns",
-    thead: "Groups header content in a table",
-    tbody: "Groups body content in a table",
-    tfoot: "Groups footer content in a table",
-    tr: "Table row",
-    th: "Table header cell",
-    td: "Table data cell",
-    caption: "Title or caption for a table",
-    colgroup: "Group of columns in a table",
-    // Text semantics
-    abbr: "Abbreviation or acronym",
-    cite: "Title of a creative work",
-    dfn: "Term being defined",
-    em: "Emphasized text (typically italic)",
-    kbd: "Keyboard input",
-    samp: "Sample output from a computer program",
-    strong: "Strong importance (typically bold)",
-    var: "Variable in mathematical expression or programming",
-    sub: "Subscript text",
-    sup: "Superscript text",
-    small: "Side comments or small print",
-    b: "Bold text without extra importance",
-    i: "Italic text (alternate voice/mood)",
-    s: "Text that is no longer accurate (strikethrough)",
-    u: "Unarticulated annotation (underline)",
-    q: "Short inline quotation",
-    data: "Machine-readable content (HTML5)",
-    ruby: "Ruby annotation for East Asian typography (HTML5)",
-    rt: "Ruby text component (HTML5)",
-    rp: "Fallback parentheses for ruby annotations (HTML5)",
-    bdi: "Isolates text for bidirectional formatting (HTML5)",
-    bdo: "Overrides text direction",
-    // Embedded content
-    iframe: "Nested browsing context (inline frame)",
-    embed: "External content plugin (HTML5)",
-    object: "External resource (image, video, etc.)",
-  };
-  return semanticTagDescriptions[tagName] || `HTML5 tag: ${tagName}`;
-}
+// getSemanticTagDescription imported from @/lib/aria-tooltips
 
-function collectRolesFromDomTree(node: DOMTreeNode | null): string[] {
-  if (!node) {
-    return [];
-  }
+// collectRolesFromDomTree imported from @/lib/dom-tree-utils
 
-  const roles = new Set<string>();
+// collectAriaAttributesFromDomTree imported from @/lib/dom-tree-utils
 
-  function traverse(current: DOMTreeNode) {
-    const role = current.attributes.role?.trim();
-    if (role) {
-      roles.add(role);
-    }
-    current.children?.forEach(traverse);
-  }
+// nodeMatchesDomTreeFilters imported from @/lib/dom-tree-utils
 
-  traverse(node);
-  return Array.from(roles).sort((a, b) => a.localeCompare(b));
-}
+// getNodeMatchInfo imported from @/lib/dom-tree-utils
 
-function collectAriaAttributesFromDomTree(node: DOMTreeNode | null): string[] {
-  if (!node) {
-    return [];
-  }
+// filterDomTreeByFilters imported from @/lib/dom-tree-utils
 
-  const attrs = new Set<string>();
-
-  function traverse(current: DOMTreeNode) {
-    Object.keys(current.attributes).forEach((attr) => {
-      if (attr.startsWith("aria-")) {
-        attrs.add(attr);
-      }
-    });
-    current.children?.forEach(traverse);
-  }
-
-  traverse(node);
-  return Array.from(attrs).sort((a, b) => a.localeCompare(b));
-}
-
-function nodeMatchesDomTreeFilters(
-  node: DOMTreeNode,
-  filters: DomTreeFilters,
-  ariaRelationships?: {
-    idToSelector: Map<string, string>;
-    selectorToRelationships: Map<string, AriaRelationship[]>;
-    idToReferences: Map<
-      string,
-      {
-        selector: string;
-        type: "labelledby" | "describedby" | "controls" | "haspopup";
-      }[]
-    >;
-  },
-): boolean {
-  if (filters.roles.length > 0) {
-    const nodeRole = node.attributes.role?.trim();
-    if (!nodeRole || !filters.roles.includes(nodeRole)) {
-      return false;
-    }
-  }
-
-  if (filters.ariaAttrs.length > 0) {
-    const hasMatchingAria = Object.keys(node.attributes).some(
-      (attr) => attr.startsWith("aria-") && filters.ariaAttrs.includes(attr),
-    );
-    if (!hasMatchingAria) {
-      return false;
-    }
-  }
-
-  if (filters.associationId) {
-    const relationships =
-      ariaRelationships?.selectorToRelationships.get(node.selector) || [];
-    const isSourceAssociation = relationships.length > 0;
-
-    const elementId = node.attributes.id;
-    const isTargetAssociation =
-      elementId &&
-      (ariaRelationships?.idToReferences.get(elementId)?.length || 0) > 0;
-
-    if (!isSourceAssociation && !isTargetAssociation) {
-      return false;
-    }
-  }
-
-  if (filters.keyword.trim()) {
-    const keywordFilter = filters.keyword.trim().toLowerCase();
-    const keywordHaystack = [
-      node.tagName,
-      node.selector,
-      node.textSnippet || "",
-      ...Object.entries(node.attributes).flatMap(([name, value]) => [
-        name,
-        value,
-      ]),
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    if (!keywordHaystack.includes(keywordFilter)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function getNodeMatchInfo(
-  node: DOMTreeNode,
-  filters: DomTreeFilters,
-  ariaRelationships?: {
-    idToSelector: Map<string, string>;
-    selectorToRelationships: Map<string, AriaRelationship[]>;
-    idToReferences: Map<
-      string,
-      {
-        selector: string;
-        type: "labelledby" | "describedby" | "controls" | "haspopup";
-      }[]
-    >;
-  },
-): string[] {
-  const matches: string[] = [];
-
-  if (filters.roles.length > 0) {
-    const nodeRole = node.attributes.role?.trim();
-    if (nodeRole && filters.roles.includes(nodeRole)) {
-      matches.push("role");
-    }
-  }
-
-  if (filters.ariaAttrs.length > 0) {
-    const hasMatchingAria = Object.keys(node.attributes).some(
-      (attr) => attr.startsWith("aria-") && filters.ariaAttrs.includes(attr),
-    );
-    if (hasMatchingAria) {
-      matches.push("aria");
-    }
-  }
-
-  if (filters.associationId) {
-    const relationships =
-      ariaRelationships?.selectorToRelationships.get(node.selector) || [];
-    const isSourceAssociation = relationships.length > 0;
-
-    const elementId = node.attributes.id;
-    const isTargetAssociation =
-      elementId &&
-      (ariaRelationships?.idToReferences.get(elementId)?.length || 0) > 0;
-
-    if (isSourceAssociation || isTargetAssociation) {
-      matches.push("association");
-    }
-  }
-
-  if (filters.keyword.trim()) {
-    const keywordFilter = filters.keyword.trim().toLowerCase();
-    const keywordHaystack = [
-      node.tagName,
-      node.selector,
-      node.textSnippet || "",
-      ...Object.entries(node.attributes).flatMap(([name, value]) => [
-        name,
-        value,
-      ]),
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    if (keywordHaystack.includes(keywordFilter)) {
-      matches.push("keyword");
-    }
-  }
-
-  return matches;
-}
-
-function filterDomTreeByFilters(
-  node: DOMTreeNode,
-  filters: DomTreeFilters,
-  ariaRelationships?: {
-    idToSelector: Map<string, string>;
-    selectorToRelationships: Map<string, AriaRelationship[]>;
-    idToReferences: Map<
-      string,
-      {
-        selector: string;
-        type: "labelledby" | "describedby" | "controls" | "haspopup";
-      }[]
-    >;
-  },
-): DOMTreeNode | null {
-  const hasActiveFilters = Object.values(filters).some((value) => {
-    if (Array.isArray(value)) {
-      return value.length > 0;
-    }
-    if (typeof value === "boolean") {
-      return value;
-    }
-    return value.trim().length > 0;
-  });
-  if (!hasActiveFilters) {
-    return node;
-  }
-
-  const filteredChildren = (node.children || [])
-    .map((child) => filterDomTreeByFilters(child, filters, ariaRelationships))
-    .filter((child): child is DOMTreeNode => child !== null);
-
-  const currentNodeMatches = nodeMatchesDomTreeFilters(
-    node,
-    filters,
-    ariaRelationships,
-  );
-
-  if (!currentNodeMatches && filteredChildren.length === 0) {
-    return null;
-  }
-
-  const resultChildren = currentNodeMatches
-    ? (node.children ?? [])
-    : filteredChildren;
-
-  return {
-    ...node,
-    children: resultChildren,
-  };
-}
-
-function canRoleProduceMatches(
-  role: string,
-  currentFilters: DomTreeFilters,
-  domTree: DOMTreeNode | null,
-  ariaRelationships?: {
-    idToSelector: Map<string, string>;
-    selectorToRelationships: Map<string, AriaRelationship[]>;
-    idToReferences: Map<
-      string,
-      {
-        selector: string;
-        type: "labelledby" | "describedby" | "controls" | "haspopup";
-      }[]
-    >;
-  },
-): boolean {
-  if (!domTree) return false;
-
-  // Create a test filter with just this role + keep other active filters
-  const testFilters: DomTreeFilters = {
-    roles: [role],
-    ariaAttrs: currentFilters.ariaAttrs,
-    associationId: currentFilters.associationId,
-    keyword: currentFilters.keyword,
-  };
-
-  // Check if any node matches this combination
-  function hasMatch(node: DOMTreeNode): boolean {
-    if (nodeMatchesDomTreeFilters(node, testFilters, ariaRelationships)) {
-      return true;
-    }
-    return (node.children || []).some(hasMatch);
-  }
-
-  return hasMatch(domTree);
-}
-
-function canAriaAttrProduceMatches(
-  ariaAttr: string,
-  currentFilters: DomTreeFilters,
-  domTree: DOMTreeNode | null,
-  ariaRelationships?: {
-    idToSelector: Map<string, string>;
-    selectorToRelationships: Map<string, AriaRelationship[]>;
-    idToReferences: Map<
-      string,
-      {
-        selector: string;
-        type: "labelledby" | "describedby" | "controls" | "haspopup";
-      }[]
-    >;
-  },
-): boolean {
-  if (!domTree) return false;
-
-  // Create a test filter with just this aria attribute + keep other active filters
-  const testFilters: DomTreeFilters = {
-    roles: currentFilters.roles,
-    ariaAttrs: [ariaAttr],
-    associationId: currentFilters.associationId,
-    keyword: currentFilters.keyword,
-  };
-
-  // Check if any node matches this combination
-  function hasMatch(node: DOMTreeNode): boolean {
-    if (nodeMatchesDomTreeFilters(node, testFilters, ariaRelationships)) {
-      return true;
-    }
-    return (node.children || []).some(hasMatch);
-  }
-
-  return hasMatch(domTree);
-}
-
-function collectFilteredNodes(
-  node: DOMTreeNode,
-  filters: DomTreeFilters,
-  ariaRelationships?: {
-    idToSelector: Map<string, string>;
-    selectorToRelationships: Map<string, AriaRelationship[]>;
-    idToReferences: Map<
-      string,
-      {
-        selector: string;
-        type: "labelledby" | "describedby" | "controls" | "haspopup";
-      }[]
-    >;
-  },
-  collected: DOMTreeNode[] = [],
-): DOMTreeNode[] {
-  if (nodeMatchesDomTreeFilters(node, filters, ariaRelationships)) {
-    collected.push(node);
-  }
-  (node.children || []).forEach((child) =>
-    collectFilteredNodes(child, filters, ariaRelationships, collected),
-  );
-  return collected;
-}
+// canAriaAttrProduceMatches imported from @/lib/dom-tree-utils
+// collectFilteredNodes imported from @/lib/dom-tree-utils
 
 function renderDomTree(
   node: DOMTreeNode,
@@ -2225,22 +1342,16 @@ export function DOMAnalysisViewer({
   analysis,
   violations = [],
 }: DOMAnalysisViewerProps) {
-  const [domTreeFilters, setDomTreeFilters] = useState<DomTreeFilters>({
-    roles: [],
-    ariaAttrs: [],
-    associationId: false,
-    keyword: "",
-  });
-  const [expandedRoleGroups, setExpandedRoleGroups] = useState<
-    Record<string, boolean>
-  >({});
-  const [expandedFilterSections, setExpandedFilterSections] = useState<
-    Record<"roles" | "aria", boolean>
-  >({
-    roles: false,
-    aria: false,
-  });
-  const domTreeContainerRef = useRef<HTMLDivElement | null>(null);
+  const {
+    filters: domTreeFilters,
+    updateFilters,
+    clearFilters,
+    hasActiveFilters,
+  } = useDomTreeFilters();
+  const { expandedRoleGroups, toggleRoleGroup } = useRoleGroupExpansion();
+  const { expandedFilterSections, toggleSection } = useFilterSectionExpansion();
+  const hasActiveDomTreeFilters = hasActiveFilters();
+  const domTreeContainerRef = useDetailsElements(hasActiveDomTreeFilters);
   const { headings, landmarks, roles, forms, focusable, summary, domTree } =
     analysis;
   const violationTargets = buildViolationTargetMap(violations);
@@ -2272,117 +1383,7 @@ export function DOMAnalysisViewer({
     () => collectAriaAttributesFromDomTree(domTree || null),
     [domTree],
   );
-  const hasActiveDomTreeFilters =
-    domTreeFilters.roles.length > 0 ||
-    domTreeFilters.ariaAttrs.length > 0 ||
-    domTreeFilters.associationId ||
-    domTreeFilters.keyword.trim().length > 0;
 
-  // Sync details elements' open state when filters change
-  useEffect(() => {
-    const elements =
-      domTreeContainerRef.current?.querySelectorAll<HTMLDetailsElement>(
-        ".dom-tree-details",
-      );
-
-    elements?.forEach((element) => {
-      if (element.getAttribute("data-initialized") !== "true") {
-        element.open = element.getAttribute("data-default-open") === "true";
-        element.setAttribute("data-initialized", "true");
-      }
-
-      if (hasActiveDomTreeFilters) {
-        if (!element.hasAttribute("data-user-opened")) {
-          const isMatchNode = element.getAttribute("data-has-match") === "true";
-          const isInHighlightedBranch =
-            element.getAttribute("data-under-highlight-branch") === "true";
-          // Open matched nodes to show them, close container nodes that just contain matches
-          element.open = isMatchNode || !isInHighlightedBranch;
-        }
-      } else if (!element.hasAttribute("data-user-opened")) {
-        const isMainSection =
-          element.getAttribute("data-default-open") === "true";
-        if (!isMainSection) {
-          element.open = false;
-        }
-      }
-    });
-  }, [hasActiveDomTreeFilters, domTreeFilters]);
-
-  // Track user interactions with details elements
-  useEffect(() => {
-    const getSingleNestedDetails = (
-      detailsElement: HTMLDetailsElement,
-    ): HTMLDetailsElement | null => {
-      const childrenContainer = Array.from(detailsElement.children).find(
-        (child) =>
-          child instanceof HTMLElement &&
-          child.classList.contains("dom-tree-children"),
-      ) as HTMLElement | undefined;
-
-      if (!childrenContainer) {
-        return null;
-      }
-
-      const wrappers = Array.from(childrenContainer.children).filter(
-        (child): child is HTMLElement => child instanceof HTMLElement,
-      );
-
-      if (wrappers.length !== 1) {
-        return null;
-      }
-
-      const directChildDetails = Array.from(wrappers[0].children).find(
-        (child) =>
-          child instanceof HTMLDetailsElement &&
-          child.classList.contains("dom-tree-details"),
-      );
-
-      return directChildDetails instanceof HTMLDetailsElement
-        ? directChildDetails
-        : null;
-    };
-
-    const openSingleChildToggleChain = (root: HTMLDetailsElement) => {
-      let current: HTMLDetailsElement | null = root;
-
-      while (current) {
-        const nestedDetails = getSingleNestedDetails(current);
-        if (!nestedDetails || nestedDetails.hasAttribute("data-user-opened")) {
-          break;
-        }
-
-        nestedDetails.open = true;
-        nestedDetails.setAttribute("data-user-opened", "true");
-        current = nestedDetails;
-      }
-    };
-
-    const handleToggle = (e: Event) => {
-      const target = e.target as HTMLDetailsElement;
-      if (target.classList.contains("dom-tree-details") && e.isTrusted) {
-        target.setAttribute("data-user-opened", "true");
-        if (target.open) {
-          openSingleChildToggleChain(target);
-        }
-      }
-    };
-
-    const elements =
-      domTreeContainerRef.current?.querySelectorAll<HTMLDetailsElement>(
-        ".dom-tree-details",
-      );
-
-    elements?.forEach((element) => {
-      element.addEventListener("toggle", handleToggle);
-    });
-
-    return () => {
-      elements?.forEach((element) => {
-        element.removeEventListener("toggle", handleToggle);
-      });
-    };
-  }, [domTreeFilters]);
   const domTreeFilterChipSource: Array<{
     key: keyof DomTreeFilters;
     label: string;
@@ -2501,12 +1502,7 @@ export function DOMAnalysisViewer({
             <div className="dom-tree-filter-section">
               <button
                 className="dom-tree-filter-section-toggle"
-                onClick={() =>
-                  setExpandedFilterSections((prev) => ({
-                    ...prev,
-                    roles: !prev.roles,
-                  }))
-                }
+                onClick={() => toggleSection("roles")}
               >
                 <span className="toggle-icon">
                   {expandedFilterSections.roles ? "▼" : "▶"}
@@ -2529,7 +1525,7 @@ export function DOMAnalysisViewer({
                         availableRoles.length > 0
                       }
                       onChange={(event) =>
-                        setDomTreeFilters((prev) => ({
+                        updateFilters((prev) => ({
                           ...prev,
                           roles: event.target.checked ? availableRoles : [],
                         }))
@@ -2558,7 +1554,7 @@ export function DOMAnalysisViewer({
                             !canProduce && !domTreeFilters.roles.includes(role)
                           }
                           onChange={(event) =>
-                            setDomTreeFilters((prev) => ({
+                            updateFilters((prev) => ({
                               ...prev,
                               roles: event.target.checked
                                 ? [...prev.roles, role]
@@ -2578,12 +1574,7 @@ export function DOMAnalysisViewer({
             <div className="dom-tree-filter-section">
               <button
                 className="dom-tree-filter-section-toggle"
-                onClick={() =>
-                  setExpandedFilterSections((prev) => ({
-                    ...prev,
-                    aria: !prev.aria,
-                  }))
-                }
+                onClick={() => toggleSection("aria")}
               >
                 <span className="toggle-icon">
                   {expandedFilterSections.aria ? "▼" : "▶"}
@@ -2607,7 +1598,7 @@ export function DOMAnalysisViewer({
                         availableAriaAttrs.length > 0
                       }
                       onChange={(event) =>
-                        setDomTreeFilters((prev) => ({
+                        updateFilters((prev) => ({
                           ...prev,
                           ariaAttrs: event.target.checked
                             ? availableAriaAttrs
@@ -2639,7 +1630,7 @@ export function DOMAnalysisViewer({
                             !domTreeFilters.ariaAttrs.includes(attr)
                           }
                           onChange={(event) =>
-                            setDomTreeFilters((prev) => ({
+                            updateFilters((prev) => ({
                               ...prev,
                               ariaAttrs: event.target.checked
                                 ? [...prev.ariaAttrs, attr]
@@ -2660,7 +1651,7 @@ export function DOMAnalysisViewer({
                 type="checkbox"
                 checked={domTreeFilters.associationId}
                 onChange={(event) =>
-                  setDomTreeFilters((prev) => ({
+                  updateFilters((prev) => ({
                     ...prev,
                     associationId: event.target.checked,
                   }))
@@ -2676,7 +1667,7 @@ export function DOMAnalysisViewer({
                 value={domTreeFilters.keyword}
                 placeholder="tag, selector, text, attribute"
                 onChange={(event) =>
-                  setDomTreeFilters((prev) => ({
+                  updateFilters((prev) => ({
                     ...prev,
                     keyword: event.target.value,
                   }))
@@ -2688,14 +1679,7 @@ export function DOMAnalysisViewer({
               type="button"
               className="dom-tree-filter-reset"
               disabled={!hasActiveDomTreeFilters}
-              onClick={() =>
-                setDomTreeFilters({
-                  roles: [],
-                  ariaAttrs: [],
-                  associationId: false,
-                  keyword: "",
-                })
-              }
+              onClick={clearFilters}
             >
               Clear filters
             </button>
@@ -2708,7 +1692,7 @@ export function DOMAnalysisViewer({
                   type="button"
                   className="dom-tree-filter-chip"
                   onClick={() =>
-                    setDomTreeFilters((prev) => ({
+                    updateFilters((prev) => ({
                       ...prev,
                       [chip.key]:
                         chip.key === "roles" || chip.key === "ariaAttrs"
@@ -2952,12 +1936,7 @@ export function DOMAnalysisViewer({
                 <button
                   type="button"
                   className="role-toggle"
-                  onClick={() =>
-                    setExpandedRoleGroups((prev) => ({
-                      ...prev,
-                      [`${group.role}-${idx}`]: !prev[`${group.role}-${idx}`],
-                    }))
-                  }
+                  onClick={() => toggleRoleGroup(`${group.role}-${idx}`)}
                   aria-expanded={Boolean(
                     expandedRoleGroups[`${group.role}-${idx}`],
                   )}
